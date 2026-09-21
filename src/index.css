@@ -1,0 +1,64 @@
+:root {
+  --ink: #0B1220;
+  --navy: #10193A;
+  --navy-2: #172352;
+  --navy-3: #223068;
+  --paper: #F5F6FA;
+  --surface: #FFFFFF;
+  --line: #E2E5EE;
+  --line-soft: #EDEFF6;
+  --accent: #3457D5;
+  --accent-2: #6C8CFF;
+  --muted: #6B7280;
+  --muted-2: #9AA1B4;
+  --ok: #1B8A5A;
+  --ok-bg: #EAF7F1;
+  --warn: #B7791F;
+  --warn-bg: #FBF3E3;
+  --err: #C1443C;
+  --err-bg: #FBEBEA;
+  --bank-produbanco: #3457D5;
+  --bank-pichincha: #7C5CFF;
+  --bank-guayaquil: #0FA3B1;
+
+  --font-ui: 'IBM Plex Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  --font-mono: 'IBM Plex Mono', 'SFMono-Regular', Consolas, monospace;
+}
+
+* { box-sizing: border-box; }
+
+html, body, #root { height: 100%; }
+
+body {
+  margin: 0;
+  font-family: var(--font-ui);
+  color: var(--ink);
+  background: var(--paper);
+  -webkit-font-smoothing: antialiased;
+}
+
+.mono {
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.01em;
+}
+
+button, input, select {
+  font-family: inherit;
+}
+
+a { color: var(--accent); }
+
+.app-shell { display: flex; min-height: 100vh; }
+.app-rail {
+  width: 248px; flex-shrink: 0; padding: 30px 22px;
+  display: flex; flex-direction: column;
+  position: sticky; top: 0; height: 100vh;
+}
+.app-content { flex: 1; padding: 44px 52px 64px; max-width: 980px; }
+
+@media (max-width: 760px) {
+  .app-shell { flex-direction: column; }
+  .app-rail { width: 100%; height: auto; position: static; }
+  .app-content { padding: 24px 20px 48px; max-width: 100%; }
+}

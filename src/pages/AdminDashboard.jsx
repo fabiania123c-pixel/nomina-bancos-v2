@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import AppShell from '../components/AppShell.jsx';
-import { getHistorialCorridas, getArchivosCorrida } from '../lib/historial.js';
+import { getHistorialCorridas, getArchivosCorrida, anularCorrida } from '../lib/historial.js';
 import { calcularKPIs, corridasRecientes, calcularPorPersona, LABEL_BANCO } from '../lib/kpis.js';
 import { descargarPdfResumen } from '../lib/pdf.js';
 import { buildFileContent, BANK_PROFILES } from '../lib/bankProfiles.js';
@@ -141,6 +141,15 @@ function CorridaRow({ corrida: c }) {
   const [descargando, setDescargando] = useState(null);
   const [error, setError] = useState('');
 
+  const [mostrandoForm, setMostrandoForm] = useState(false);
+  const [nota, setNota] = useState('');
+  const [anulando, setAnulando] = useState(false);
+  const [anuladaLocal, setAnuladaLocal] = useState(false);
+  const [notaLocal, setNotaLocal] = useState('');
+
+  const anulada = c.anulada || anuladaLocal;
+  const notaAnulacion = c.notaAnulacion || notaLocal;
+
   function descargarPdf() {
     descargarPdfResumen({
       tipo: c.tipo,
@@ -179,19 +188,50 @@ function CorridaRow({ corrida: c }) {
     }
   }
 
+  async function confirmarAnulacion() {
+    if (!nota.trim()) {
+      setError('Escribe una nota explicando por qué se anula.');
+      return;
+    }
+    setError('');
+    setAnulando(true);
+    try {
+      await anularCorrida(c.id, nota);
+      setAnuladaLocal(true);
+      setNotaLocal(nota.trim());
+      setMostrandoForm(false);
+    } catch (err) {
+      console.error(err);
+      setError('No se pudo anular: ' + err.message);
+    } finally {
+      setAnulando(false);
+    }
+  }
+
   return (
-    <div style={rowCard}>
+    <div style={{ ...rowCard, opacity: anulada ? 0.7 : 1 }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
         <div>
-          <div style={{ fontWeight: 600, fontSize: 14 }}>{LABEL_TIPO[c.tipo] || c.tipo}</div>
+          <div style={{ fontWeight: 600, fontSize: 14 }}>
+            {LABEL_TIPO[c.tipo] || c.tipo}
+            {anulada && <span style={{ ...badgeAnulada, marginLeft: 8 }}>Anulada</span>}
+          </div>
           <div style={{ fontSize: 12, color: 'var(--muted)', marginTop: 3 }}>
             {new Date(c.fecha).toLocaleString('es-EC')} · {c.generadoPorNombre}
           </div>
         </div>
-        <span style={{ fontSize: 11.5, fontWeight: 600, color: c.finalizado ? 'var(--ok)' : 'var(--warn)' }}>
-          {c.finalizado ? 'Finalizado' : 'Pendiente'}
-        </span>
+        {!anulada && (
+          <span style={{ fontSize: 11.5, fontWeight: 600, color: c.finalizado ? 'var(--ok)' : 'var(--warn)' }}>
+            {c.finalizado ? 'Finalizado' : 'Pendiente'}
+          </span>
+        )}
       </div>
+
+      {anulada && (
+        <div style={{ fontSize: 12.5, color: 'var(--err)', marginTop: 6 }}>
+          {notaAnulacion}
+        </div>
+      )}
 
       <div style={{ marginTop: 14, display: 'flex', justifyContent: 'space-between', alignItems: 'flex-end', flexWrap: 'wrap', gap: 16 }}>
         <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
@@ -213,8 +253,35 @@ function CorridaRow({ corrida: c }) {
             </button>
           ))}
           <button onClick={descargarPdf} style={btnGhost}>Descargar PDF</button>
+          {!anulada && !mostrandoForm && (
+            <button onClick={() => setMostrandoForm(true)} style={btnAnular}>Anular</button>
+          )}
         </div>
       </div>
+
+      {mostrandoForm && (
+        <div style={{ marginTop: 12, padding: 12, background: 'var(--err-bg)', borderRadius: 8 }}>
+          <label style={{ fontSize: 12, fontWeight: 600, color: 'var(--err)', display: 'block', marginBottom: 6 }}>
+            ¿Por qué se anula esta corrida?
+          </label>
+          <textarea
+            value={nota}
+            onChange={(e) => setNota(e.target.value)}
+            rows={2}
+            placeholder="Ej: monto duplicado, se generó con el archivo equivocado…"
+            style={notaInput}
+          />
+          <div style={{ display: 'flex', gap: 8, marginTop: 8 }}>
+            <button onClick={confirmarAnulacion} disabled={anulando} style={btnConfirmarAnular}>
+              {anulando ? 'Anulando…' : 'Confirmar anulación'}
+            </button>
+            <button onClick={() => { setMostrandoForm(false); setNota(''); setError(''); }} style={btnGhost}>
+              Cancelar
+            </button>
+          </div>
+        </div>
+      )}
+
       {error && <div style={{ fontSize: 12, color: 'var(--err)', marginTop: 8 }}>{error}</div>}
     </div>
   );
@@ -349,3 +416,7 @@ const emptyState = { textAlign: 'center', padding: '48px 20px', color: 'var(--mu
 const statCard = { background: '#fff', border: '1px solid var(--line)', borderRadius: 12, padding: '16px 18px', flex: '1 1 180px', minWidth: 170 };
 const barTrack = { background: 'var(--line-soft)', borderRadius: 6, height: 9, overflow: 'hidden' };
 const barFill = { height: '100%', borderRadius: 6 };
+const badgeAnulada = { fontSize: 10.5, fontWeight: 700, color: 'var(--err)', background: 'var(--err-bg)', borderRadius: 5, padding: '2px 7px' };
+const btnAnular = { background: '#fff', border: '1.5px solid var(--err)', color: 'var(--err)', borderRadius: 8, padding: '8px 14px', fontSize: 12.5, cursor: 'pointer', fontFamily: 'inherit' };
+const btnConfirmarAnular = { background: 'var(--err)', color: '#fff', border: 'none', borderRadius: 8, padding: '8px 14px', fontSize: 12.5, fontWeight: 600, cursor: 'pointer', fontFamily: 'inherit' };
+const notaInput = { width: '100%', border: '1.5px solid var(--line)', borderRadius: 8, padding: '8px 10px', fontSize: 13, fontFamily: 'inherit', resize: 'vertical' };

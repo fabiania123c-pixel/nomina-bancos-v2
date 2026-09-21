@@ -4,7 +4,8 @@ export const LABEL_BANCO = {
   guayaquil: 'Banco de Guayaquil',
 };
 
-export function calcularKPIs(corridas) {
+export function calcularKPIs(corridasConAnuladas) {
+  const corridas = corridasConAnuladas.filter((c) => !c.anulada);
   const porBanco = {
     produbanco: { registros: 0, total: 0 },
     pichincha: { registros: 0, total: 0 },
@@ -66,7 +67,8 @@ export function corridasRecientes(corridas, horas = 48) {
   return corridas.filter((c) => c.finalizado && c.finalizado_en && new Date(c.finalizado_en).getTime() > limite);
 }
 
-export function calcularPorPersona(corridas) {
+export function calcularPorPersona(corridasConAnuladas) {
+  const corridas = corridasConAnuladas.filter((c) => !c.anulada);
   const porPersona = new Map();
   corridas.forEach((c) => {
     const nombre = c.generadoPorNombre || 'Desconocido';
@@ -84,9 +86,9 @@ export function calcularPorPersona(corridas) {
     .sort((a, b) => b.total - a.total);
 }
 
-export function compararConHistorico(detalleActual, corridasHistoricas, tipo) {
+export function compararConHistorico(detalleActual, corridasHistoricasConAnuladas, tipo) {
   const avisos = [];
-  const mismasTipo = corridasHistoricas.filter((c) => c.tipo === tipo);
+  const mismasTipo = corridasHistoricasConAnuladas.filter((c) => !c.anulada && c.tipo === tipo);
   if (mismasTipo.length < 2) return avisos;
 
   Object.entries(detalleActual).forEach(([banco, info]) => {

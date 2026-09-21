@@ -23,7 +23,7 @@ export async function getHistorialCorridas(limite = 50) {
   const { data, error } = await supabase
     .from('corridas')
     .select(
-      'id, tipo, generado_por, fecha, detalle_bancos, registros_con_error, finalizado, finalizado_en, profiles(nombre)'
+      'id, tipo, generado_por, fecha, detalle_bancos, registros_con_error, finalizado, finalizado_en, profiles(nombre), corrida_anulaciones(nota, creado_en)'
     )
     .order('fecha', { ascending: false })
     .limit(limite);
@@ -32,7 +32,15 @@ export async function getHistorialCorridas(limite = 50) {
     console.error('Error leyendo el historial:', error.message);
     return [];
   }
-  return data.map((c) => ({ ...c, generadoPorNombre: c.profiles?.nombre || 'Desconocido' }));
+  return data.map((c) => {
+    const anulacion = Array.isArray(c.corrida_anulaciones) ? c.corrida_anulaciones[0] : c.corrida_anulaciones;
+    return {
+      ...c,
+      generadoPorNombre: c.profiles?.nombre || 'Desconocido',
+      anulada: !!anulacion,
+      notaAnulacion: anulacion?.nota || null,
+    };
+  });
 }
 
 export async function registrarCorrida({ tipo, detalleBancos, registrosConError = 0 }) {
@@ -65,12 +73,6 @@ export async function finalizarCorrida(corridaId) {
   if (error) throw error;
 }
 
-/**
- * Guarda las filas resueltas (datos de empleados) de una corrida, para que
- * el Admin pueda volver a descargar el .txt real más tarde. Vive en una
- * tabla aparte con acceso restringido — solo el Admin o quien generó la
- * corrida puede leerlas después.
- */
 export async function registrarArchivosCorrida(corridaId, filasPorBanco, ctx) {
   const { error } = await supabase
     .from('corrida_archivos')
@@ -79,10 +81,6 @@ export async function registrarArchivosCorrida(corridaId, filasPorBanco, ctx) {
   if (error) throw error;
 }
 
-/**
- * Trae las filas guardadas de una corrida (para que el Admin regenere y
- * descargue el .txt real).
- */
 export async function getArchivosCorrida(corridaId) {
   const { data, error } = await supabase
     .from('corrida_archivos')
@@ -95,4 +93,23 @@ export async function getArchivosCorrida(corridaId) {
     return null;
   }
   return data;
+}
+
+/**
+ * Anula una corrida — solo funciona si quien llama es Admin (lo hace
+ * cumplir la política de la tabla, no este código). Requiere una nota
+ * explicando por qué, para que quede registro.
+ */
+export async function anularCorrida(corridaId, nota) {
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  if (!user) throw new Error('No hay sesión activa');
+  if (!nota || !nota.trim()) throw new Error('Escribe una nota explicando por qué se anula.');
+
+  const { error } = await supabase
+    .from('corrida_anulaciones')
+    .insert({ corrida_id: corridaId, anulado_por: user.id, nota: nota.trim() });
+
+  if (error) throw error;
 }

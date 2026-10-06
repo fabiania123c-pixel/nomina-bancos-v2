@@ -67,7 +67,9 @@ export function parseArchivoPago(arrayBuffer) {
     nombre: header.indexOf('NOMBRE'),
     cedula: header.findIndex((h) => h === 'CEDULA' || h === 'CÉDULA'),
     monto: header.findIndex((h) => h.startsWith('VALOR')),
-    baja: header.indexOf('BAJA'),
+    // Match flexible (BAJA, FECHA BAJA, FECHA DE BAJA...) — esta columna es
+    // opcional y solo aplica a finiquitos, así que no se exige exacta.
+    baja: header.findIndex((h) => h.includes('BAJA')),
   };
   if (idx.cedula === -1) throw new Error('Falta la columna CEDULA.');
   if (idx.monto === -1) {

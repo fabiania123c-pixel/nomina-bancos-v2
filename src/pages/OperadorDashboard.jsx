@@ -26,7 +26,7 @@ const LABEL_ARCHIVO_PAGO = {
 };
 
 // cuentaOrigen/ruc de Equinox y Medeport quedan vacíos hasta que se confirmen
-// los reales — mientras tanto el campo sigue editable a mano para esos dos.
+// los reales — el sistema bloquea "Procesar" si faltan (ver más abajo).
 const EMPRESAS = {
   superdeporte: { label: 'Superdeporte', cuentaOrigen: '01005024240', ruc: '1791413237001' },
   equinox: { label: 'Equinox', cuentaOrigen: '', ruc: '' },
@@ -71,6 +71,10 @@ export default function OperadorDashboard({ perfil, onLogout }) {
     setErrorGeneral('');
     setResultado(null);
     setFinalizado(false);
+    if (!cuentaOrigen || !ruc) {
+      setErrorGeneral(`${EMPRESAS[empresa].label} todavía no tiene cuenta origen / RUC configurados en el sistema — avísale a Fabián antes de continuar.`);
+      return;
+    }
     if (!dataMadreFile || !pagoFile) {
       setErrorGeneral('Sube los dos archivos antes de procesar.');
       return;
@@ -134,12 +138,17 @@ export default function OperadorDashboard({ perfil, onLogout }) {
     });
   }
 
-  function descargarDetalle() {
-    descargarDetalleExcel({
-      resultado: resultado.resultado,
-      tipo,
-      filename: `detalle-nomina-${dd}${mm}${yyyy}.xlsx`,
-    });
+  async function descargarDetalle() {
+    try {
+      await descargarDetalleExcel({
+        resultado: resultado.resultado,
+        tipo,
+        filename: `detalle-nomina-${dd}${mm}${yyyy}.xlsx`,
+      });
+    } catch (err) {
+      console.error(err);
+      setErrorGeneral('No se pudo generar el Excel de detalle: ' + err.message);
+    }
   }
 
   async function handleFinalizar() {
@@ -199,13 +208,9 @@ export default function OperadorDashboard({ perfil, onLogout }) {
           <Field label="Fecha de la corrida">
             <div className="mono" style={fechaAuto}>{dd}/{mm}/{yyyy}</div>
           </Field>
-          <Field label="Cuenta origen (Produbanco)">
-            <input value={cuentaOrigen} onChange={(e) => setCuentaOrigen(e.target.value)} className="mono" style={input} />
-          </Field>
-          <Field label="RUC (Pichincha)">
-            <input value={ruc} onChange={(e) => setRuc(e.target.value)} className="mono" style={input} />
-          </Field>
         </div>
+        {/* Cuenta origen y RUC ya no se muestran en pantalla — los fija
+            automáticamente la empresa seleccionada arriba (ver EMPRESAS). */}
       </Section>
 
       <Section num="2" title="Subir archivos">

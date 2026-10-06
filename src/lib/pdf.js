@@ -13,6 +13,20 @@ function formatoDolares(n) {
   return `$${(n || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 }
 
+const MESES_LABEL = {
+  '01': 'Enero', '02': 'Febrero', '03': 'Marzo', '04': 'Abril', '05': 'Mayo', '06': 'Junio',
+  '07': 'Julio', '08': 'Agosto', '09': 'Septiembre', '10': 'Octubre', '11': 'Noviembre', '12': 'Diciembre',
+};
+
+function formatoPeriodoLegible(periodo) {
+  // periodo llega como "MES-MM-YYYY" — el mismo valor que se usa dentro del
+  // archivo de Produbanco. Acá se muestra en humano: "Octubre 2026".
+  const m = /^MES-(\d{2})-(\d{4})$/.exec(periodo || '');
+  if (!m) return periodo;
+  const [, mm, yyyy] = m;
+  return `${MESES_LABEL[mm] || mm} ${yyyy}`;
+}
+
 export function descargarPdfResumen({ tipo, periodo, fecha, generadoPor, detalleBancos, filename }) {
   const doc = new jsPDF();
   let y = 20;
@@ -27,7 +41,7 @@ export function descargarPdfResumen({ tipo, periodo, fecha, generadoPor, detalle
   doc.setFontSize(11);
   doc.text(`Tipo: ${LABEL_TIPO[tipo] || tipo}`, 14, y);
   y += 7;
-  doc.text(`Periodo: ${periodo}`, 14, y);
+  doc.text(`Periodo: ${formatoPeriodoLegible(periodo)}`, 14, y);
   y += 7;
   if (fecha) {
     doc.text(`Fecha: ${fecha}`, 14, y);

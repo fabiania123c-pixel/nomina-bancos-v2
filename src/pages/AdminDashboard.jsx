@@ -211,7 +211,7 @@ function CorridaRow({ corrida: c }) {
         setError('No se encontró el archivo guardado para esta corrida.');
         return;
       }
-      descargarDetalleExcel({
+      await descargarDetalleExcel({
         resultado: archivos.filas_por_banco,
         tipo: c.tipo,
         filename: `detalle-${new Date(c.fecha).toISOString().slice(0, 10)}.xlsx`,

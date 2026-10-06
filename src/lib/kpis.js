@@ -11,10 +11,10 @@ export function calcularKPIs(corridasConAnuladas) {
     pichincha: { registros: 0, total: 0 },
     guayaquil: { registros: 0, total: 0 },
   };
-  const porTipo = {
-    finiquito: { registros: 0, total: 0, corridas: 0 },
-    nomina_regular: { registros: 0, total: 0, corridas: 0 },
-  };
+  // Dinámico (antes venía fijo a finiquito/nomina_regular): ahora hay 4 tipos
+  // nuevos (finiquito, prestamo, jubilacion, teletrabajo) más el legado
+  // nomina_regular en corridas viejas, así que cada tipo que aparezca se crea solo.
+  const porTipo = {};
   const porMes = new Map();
 
   let totalGeneral = 0;

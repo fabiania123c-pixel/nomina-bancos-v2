@@ -3,10 +3,17 @@ import AppShell from '../components/AppShell.jsx';
 import { getHistorialCorridas, getArchivosCorrida, anularCorrida } from '../lib/historial.js';
 import { calcularKPIs, corridasRecientes, calcularPorPersona, LABEL_BANCO } from '../lib/kpis.js';
 import { descargarPdfResumen } from '../lib/pdf.js';
+import { descargarDetalleExcel } from '../lib/detalleExport.js';
 import { buildFileContent, BANK_PROFILES } from '../lib/bankProfiles.js';
 import { useConteo } from '../lib/useConteo.js';
 
-const LABEL_TIPO = { nomina_regular: 'Nómina regular', finiquito: 'Finiquitos' };
+const LABEL_TIPO = {
+  finiquito: 'Finiquitos',
+  prestamo: 'Préstamos',
+  jubilacion: 'Jubilación',
+  teletrabajo: 'Teletrabajo',
+  nomina_regular: 'Nómina regular',
+};
 const COLOR_BANCO = { produbanco: 'var(--bank-produbanco)', pichincha: 'var(--bank-pichincha)', guayaquil: 'var(--bank-guayaquil)' };
 
 export default function AdminDashboard({ perfil, onLogout }) {
@@ -49,7 +56,7 @@ export default function AdminDashboard({ perfil, onLogout }) {
           />
           <BoxHome
             titulo="Dashboard de seguimiento"
-            descripcion="Cuánto se ha movido por banco, tendencia mensual, finiquitos vs. nómina regular, por responsable."
+            descripcion="Cuánto se ha movido por banco, tendencia mensual, por tipo de transacción, por responsable."
             onClick={() => setVista('kpis')}
           />
         </div>
@@ -114,7 +121,10 @@ function VistaProcesos({ corridas }) {
         <select value={filtroTipo} onChange={(e) => setFiltroTipo(e.target.value)} style={filtroInput}>
           <option value="todos">Todos los tipos</option>
           <option value="finiquito">Finiquitos</option>
-          <option value="nomina_regular">Nómina regular</option>
+          <option value="prestamo">Préstamos</option>
+          <option value="jubilacion">Jubilación</option>
+          <option value="teletrabajo">Teletrabajo</option>
+          <option value="nomina_regular">Nómina regular (histórico)</option>
         </select>
         <select value={filtroBanco} onChange={(e) => setFiltroBanco(e.target.value)} style={filtroInput}>
           <option value="todos">Todos los bancos</option>
@@ -139,6 +149,7 @@ function VistaProcesos({ corridas }) {
 
 function CorridaRow({ corrida: c }) {
   const [descargando, setDescargando] = useState(null);
+  const [descargandoDetalle, setDescargandoDetalle] = useState(false);
   const [error, setError] = useState('');
 
   const [mostrandoForm, setMostrandoForm] = useState(false);
@@ -151,12 +162,15 @@ function CorridaRow({ corrida: c }) {
   const notaAnulacion = c.notaAnulacion || notaLocal;
 
   function descargarPdf() {
+    const f = new Date(c.fecha);
+    const mmF = String(f.getMonth() + 1).padStart(2, '0');
     descargarPdfResumen({
       tipo: c.tipo,
-      periodo: new Date(c.fecha).toLocaleDateString('es-EC'),
+      periodo: `MES-${mmF}-${f.getFullYear()}`,
+      fecha: f.toLocaleDateString('es-EC'),
       generadoPor: c.generadoPorNombre,
       detalleBancos: c.detalle_bancos,
-      filename: `resumen-${new Date(c.fecha).toISOString().slice(0, 10)}.pdf`,
+      filename: `resumen-${f.toISOString().slice(0, 10)}.pdf`,
     });
   }
 
@@ -185,6 +199,28 @@ function CorridaRow({ corrida: c }) {
       setError('No se pudo descargar: ' + err.message);
     } finally {
       setDescargando(null);
+    }
+  }
+
+  async function descargarDetalle() {
+    setError('');
+    setDescargandoDetalle(true);
+    try {
+      const archivos = await getArchivosCorrida(c.id);
+      if (!archivos) {
+        setError('No se encontró el archivo guardado para esta corrida.');
+        return;
+      }
+      descargarDetalleExcel({
+        resultado: archivos.filas_por_banco,
+        tipo: c.tipo,
+        filename: `detalle-${new Date(c.fecha).toISOString().slice(0, 10)}.xlsx`,
+      });
+    } catch (err) {
+      console.error(err);
+      setError('No se pudo descargar el detalle: ' + err.message);
+    } finally {
+      setDescargandoDetalle(false);
     }
   }
 
@@ -253,6 +289,9 @@ function CorridaRow({ corrida: c }) {
             </button>
           ))}
           <button onClick={descargarPdf} style={btnGhost}>Descargar PDF</button>
+          <button onClick={descargarDetalle} disabled={descargandoDetalle} style={btnGhost}>
+            {descargandoDetalle ? '…' : 'Descargar detalle'}
+          </button>
           {!anulada && !mostrandoForm && (
             <button onClick={() => setMostrandoForm(true)} style={btnAnular}>Anular</button>
           )}
@@ -291,6 +330,7 @@ function VistaKPIs({ corridas }) {
   const k = calcularKPIs(corridas);
   const porPersona = calcularPorPersona(corridas);
   const maxBanco = Math.max(1, ...Object.values(k.porBanco).map((b) => b.total));
+  const maxTipo = Math.max(1, ...Object.values(k.porTipo).map((t) => t.total));
   const maxMes = Math.max(1, ...k.tendenciaMensual.map(([, total]) => total));
   const maxPersona = Math.max(1, ...porPersona.map((p) => p.total));
 
@@ -319,12 +359,19 @@ function VistaKPIs({ corridas }) {
         ))}
       </ChartSection>
 
-      <ChartSection title="Finiquitos vs. nómina regular">
-        <div style={{ display: 'flex', gap: 36 }}>
-          <TipoStat label="Finiquitos" corridas={k.porTipo.finiquito.corridas} total={k.porTipo.finiquito.total} />
-          <TipoStat label="Nómina regular" corridas={k.porTipo.nomina_regular.corridas} total={k.porTipo.nomina_regular.total} />
-        </div>
-      </ChartSection>
+      {Object.keys(k.porTipo).length > 0 && (
+        <ChartSection title="Por tipo de transacción">
+          {Object.entries(k.porTipo).map(([tipoKey, info]) => (
+            <BarRow
+              key={tipoKey}
+              label={`${LABEL_TIPO[tipoKey] || tipoKey} · ${info.corridas} corrida${info.corridas !== 1 ? 's' : ''}`}
+              value={`$${info.total.toLocaleString('en-US', { minimumFractionDigits: 2 })}`}
+              pct={(info.total / maxTipo) * 100}
+              color="var(--accent-2)"
+            />
+          ))}
+        </ChartSection>
+      )}
 
       {k.tendenciaMensual.length > 0 && (
         <ChartSection title="Tendencia (últimos meses)">
@@ -374,18 +421,6 @@ function BarRow({ label, value, pct, color }) {
       </div>
       <div style={barTrack}>
         <div style={{ ...barFill, width: `${pct}%`, background: color }} />
-      </div>
-    </div>
-  );
-}
-
-function TipoStat({ label, corridas, total }) {
-  return (
-    <div>
-      <div style={{ fontSize: 12, color: 'var(--muted)' }}>{label}</div>
-      <div style={{ fontSize: 19, fontWeight: 600, marginTop: 3 }}>{corridas} corrida{corridas !== 1 ? 's' : ''}</div>
-      <div className="mono" style={{ fontSize: 12.5, color: 'var(--muted)', marginTop: 2 }}>
-        ${total.toLocaleString('en-US', { minimumFractionDigits: 2 })}
       </div>
     </div>
   );

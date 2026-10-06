@@ -47,7 +47,10 @@ export function parseDataMadre(arrayBuffer) {
 }
 
 export function parseArchivoPago(arrayBuffer) {
-  const wb = XLSX.read(arrayBuffer, { type: 'array' });
+  // cellDates: true — para que la columna BAJA (fecha de salida, usada en el
+  // export de detalle de finiquitos) venga como objeto Date en vez de un
+  // número de serie de Excel.
+  const wb = XLSX.read(arrayBuffer, { type: 'array', cellDates: true });
   const ws = wb.Sheets[wb.SheetNames[0]];
   const rows = XLSX.utils.sheet_to_json(ws, { header: 1, defval: '' });
 
@@ -64,6 +67,7 @@ export function parseArchivoPago(arrayBuffer) {
     nombre: header.indexOf('NOMBRE'),
     cedula: header.findIndex((h) => h === 'CEDULA' || h === 'CÉDULA'),
     monto: header.findIndex((h) => h.startsWith('VALOR')),
+    baja: header.indexOf('BAJA'),
   };
   if (idx.cedula === -1) throw new Error('Falta la columna CEDULA.');
   if (idx.monto === -1) {
@@ -81,6 +85,7 @@ export function parseArchivoPago(arrayBuffer) {
       nombre: idx.nombre !== -1 ? String(r[idx.nombre] || '').trim() : '',
       cedula: cedulaRaw,
       monto: Number(r[idx.monto]) || 0,
+      baja: idx.baja !== -1 ? r[idx.baja] || null : null,
     });
   }
   return filas;

@@ -5,24 +5,44 @@ import { cruzarConDataMadre } from '../lib/cruce.js';
 import { buildFileContent, BANK_PROFILES } from '../lib/bankProfiles.js';
 import { registrarCorrida, finalizarCorrida, registrarArchivosCorrida, getHistorialCorridas } from '../lib/historial.js';
 import { descargarPdfResumen } from '../lib/pdf.js';
+import { descargarDetalleExcel } from '../lib/detalleExport.js';
 import { compararConHistorico } from '../lib/kpis.js';
 
-const MESES = [
-  ['01', 'Enero'], ['02', 'Febrero'], ['03', 'Marzo'], ['04', 'Abril'],
-  ['05', 'Mayo'], ['06', 'Junio'], ['07', 'Julio'], ['08', 'Agosto'],
-  ['09', 'Septiembre'], ['10', 'Octubre'], ['11', 'Noviembre'], ['12', 'Diciembre'],
-];
 const LABEL_BANCO = { produbanco: 'Produbanco', pichincha: 'Banco Pichincha', guayaquil: 'Banco de Guayaquil' };
 const COLOR_BANCO = { produbanco: 'var(--bank-produbanco)', pichincha: 'var(--bank-pichincha)', guayaquil: 'var(--bank-guayaquil)' };
 
+const TIPOS = [
+  { value: 'finiquito', label: 'Finiquitos' },
+  { value: 'prestamo', label: 'Préstamos' },
+  { value: 'jubilacion', label: 'Jubilación' },
+  { value: 'teletrabajo', label: 'Teletrabajo' },
+];
+
+const LABEL_ARCHIVO_PAGO = {
+  finiquito: 'Archivo de finiquitos',
+  prestamo: 'Archivo de préstamos',
+  jubilacion: 'Archivo de jubilación',
+  teletrabajo: 'Archivo de teletrabajo',
+};
+
+// cuentaOrigen/ruc de Equinox y Medeport quedan vacíos hasta que se confirmen
+// los reales — mientras tanto el campo sigue editable a mano para esos dos.
+const EMPRESAS = {
+  superdeporte: { label: 'Superdeporte', cuentaOrigen: '01005024240', ruc: '1791413237001' },
+  equinox: { label: 'Equinox', cuentaOrigen: '', ruc: '' },
+  medeport: { label: 'Medeport', cuentaOrigen: '', ruc: '' },
+};
+
 export default function OperadorDashboard({ perfil, onLogout }) {
   const hoy = new Date();
+  const mm = String(hoy.getMonth() + 1).padStart(2, '0');
+  const dd = String(hoy.getDate()).padStart(2, '0');
+  const yyyy = String(hoy.getFullYear());
+
   const [tipo, setTipo] = useState('finiquito');
-  const [mm, setMm] = useState(String(hoy.getMonth() + 1).padStart(2, '0'));
-  const [dd, setDd] = useState(String(hoy.getDate()));
-  const [yyyy, setYyyy] = useState(String(hoy.getFullYear()));
-  const [cuentaOrigen, setCuentaOrigen] = useState('01005024240');
-  const [ruc, setRuc] = useState('1791413237001');
+  const [empresa, setEmpresa] = useState('superdeporte');
+  const [cuentaOrigen, setCuentaOrigen] = useState(EMPRESAS.superdeporte.cuentaOrigen);
+  const [ruc, setRuc] = useState(EMPRESAS.superdeporte.ruc);
 
   const [dataMadreFile, setDataMadreFile] = useState(null);
   const [pagoFile, setPagoFile] = useState(null);
@@ -40,6 +60,12 @@ export default function OperadorDashboard({ perfil, onLogout }) {
   useEffect(() => {
     getHistorialCorridas(200).then(setHistorial);
   }, []);
+
+  function handleEmpresaChange(key) {
+    setEmpresa(key);
+    setCuentaOrigen(EMPRESAS[key].cuentaOrigen);
+    setRuc(EMPRESAS[key].ruc);
+  }
 
   async function procesar() {
     setErrorGeneral('');
@@ -100,10 +126,19 @@ export default function OperadorDashboard({ perfil, onLogout }) {
   function descargarPdf() {
     descargarPdfResumen({
       tipo,
-      periodo: `${dd}/${mm}/${yyyy}`,
+      periodo: `MES-${mm}-${yyyy}`,
+      fecha: `${dd}/${mm}/${yyyy}`,
       generadoPor: perfil.nombre,
       detalleBancos: detalleBancos(),
       filename: `resumen-nomina-${dd}${mm}${yyyy}.pdf`,
+    });
+  }
+
+  function descargarDetalle() {
+    descargarDetalleExcel({
+      resultado: resultado.resultado,
+      tipo,
+      filename: `detalle-nomina-${dd}${mm}${yyyy}.xlsx`,
     });
   }
 
@@ -140,22 +175,29 @@ export default function OperadorDashboard({ perfil, onLogout }) {
 
       <Section num="1" title="Datos de la corrida">
         <div style={{ display: 'flex', gap: 14, flexWrap: 'wrap' }}>
-          <Field label="Tipo">
-            <select value={tipo} onChange={(e) => setTipo(e.target.value)} style={input}>
-              <option value="finiquito">Finiquitos</option>
-              <option value="nomina_regular">Nómina regular</option>
+          <Field label="Tipo de transacción">
+            <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+              {TIPOS.map((t) => (
+                <button
+                  key={t.value}
+                  type="button"
+                  onClick={() => setTipo(t.value)}
+                  style={tipo === t.value ? pillActivo : pillInactivo}
+                >
+                  {t.label}
+                </button>
+              ))}
+            </div>
+          </Field>
+          <Field label="Empresa">
+            <select value={empresa} onChange={(e) => handleEmpresaChange(e.target.value)} style={input}>
+              {Object.entries(EMPRESAS).map(([key, e]) => (
+                <option key={key} value={key}>{e.label}</option>
+              ))}
             </select>
           </Field>
-          <Field label="Mes">
-            <select value={mm} onChange={(e) => setMm(e.target.value)} style={input}>
-              {MESES.map(([v, l]) => <option key={v} value={v}>{v} · {l}</option>)}
-            </select>
-          </Field>
-          <Field label="Día">
-            <input value={dd} onChange={(e) => setDd(e.target.value)} className="mono" style={{ ...input, width: 60 }} />
-          </Field>
-          <Field label="Año">
-            <input value={yyyy} onChange={(e) => setYyyy(e.target.value)} className="mono" style={{ ...input, width: 80 }} />
+          <Field label="Fecha de la corrida">
+            <div className="mono" style={fechaAuto}>{dd}/{mm}/{yyyy}</div>
           </Field>
           <Field label="Cuenta origen (Produbanco)">
             <input value={cuentaOrigen} onChange={(e) => setCuentaOrigen(e.target.value)} className="mono" style={input} />
@@ -176,7 +218,7 @@ export default function OperadorDashboard({ perfil, onLogout }) {
             accept=".xlsx,.xlsm"
           />
           <Dropzone
-            label={tipo === 'finiquito' ? 'Archivo de finiquitos' : 'Archivo de nómina'}
+            label={LABEL_ARCHIVO_PAGO[tipo] || 'Archivo de pago'}
             hint=".xlsx"
             fileName={pagoFile?.name}
             onChange={(f) => setPagoFile(f)}
@@ -253,8 +295,9 @@ export default function OperadorDashboard({ perfil, onLogout }) {
             </div>
           ))}
 
-          <div style={{ display: 'flex', gap: 10, marginTop: 20 }}>
+          <div style={{ display: 'flex', gap: 10, marginTop: 20, flexWrap: 'wrap' }}>
             <button onClick={descargarPdf} style={btnGhost}>Descargar resumen PDF</button>
+            <button onClick={descargarDetalle} style={btnGhost}>Descargar detalle (Excel)</button>
             <button onClick={handleFinalizar} disabled={finalizando || finalizado} style={btnPrimary}>
               {finalizado ? 'Proceso finalizado ✓' : finalizando ? 'Finalizando…' : 'Finalizar proceso'}
             </button>
@@ -333,8 +376,11 @@ const pageSubtitle = { margin: '6px 0 36px', fontSize: 13.5, color: 'var(--muted
 const sectionNum = { fontSize: 12, color: 'var(--accent)', fontWeight: 600 };
 const sectionTitle = { margin: 0, fontSize: 15, fontWeight: 600, color: 'var(--ink)' };
 const input = { border: '1.5px solid var(--line)', borderRadius: 8, padding: '9px 11px', fontSize: 13.5, fontFamily: 'inherit' };
+const fechaAuto = { border: '1.5px solid var(--line)', borderRadius: 8, padding: '9px 11px', fontSize: 13.5, background: 'var(--line-soft)', color: 'var(--muted)', display: 'flex', alignItems: 'center' };
 const btnPrimary = { background: 'var(--accent)', color: '#fff', border: 'none', borderRadius: 8, padding: '11px 20px', fontSize: 13.5, fontWeight: 600, cursor: 'pointer' };
 const btnGhost = { background: '#fff', border: '1.5px solid var(--line)', borderRadius: 8, padding: '9px 16px', fontSize: 12.5, cursor: 'pointer', fontFamily: 'inherit' };
+const pillActivo = { background: 'var(--accent)', color: '#fff', border: '1.5px solid var(--accent)', borderRadius: 20, padding: '8px 16px', fontSize: 12.5, fontWeight: 600, cursor: 'pointer', fontFamily: 'inherit' };
+const pillInactivo = { background: '#fff', color: 'var(--ink)', border: '1.5px solid var(--line)', borderRadius: 20, padding: '8px 16px', fontSize: 12.5, fontWeight: 600, cursor: 'pointer', fontFamily: 'inherit' };
 const errBox = { color: 'var(--err)', fontSize: 12.5, marginTop: 12 };
 const filaBanco = { display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '13px 0', borderBottom: '1px solid var(--line-soft)' };
 const bankDot = { width: 9, height: 9, borderRadius: '50%', display: 'inline-block', flexShrink: 0 };

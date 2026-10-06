@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import AppShell from '../components/AppShell.jsx';
-import { getHistorialCorridas, getArchivosCorrida, anularCorrida } from '../lib/historial.js';
+import { getHistorialCorridas, getArchivosCorrida, marcarSubidoBanco } from '../lib/historial.js';
 import { calcularKPIs, corridasRecientes, calcularPorPersona, LABEL_BANCO } from '../lib/kpis.js';
 import { descargarPdfResumen } from '../lib/pdf.js';
 import { descargarDetalleExcel } from '../lib/detalleExport.js';
@@ -50,7 +50,7 @@ export default function AdminDashboard({ perfil, onLogout }) {
         <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap', marginTop: 28 }}>
           <BoxHome
             titulo="Procesos finalizados"
-            descripcion="Historial de corridas generadas — revisa, y descarga el resumen en PDF de cualquiera."
+            descripcion="Historial de corridas generadas — revisa, confirma la subida a cada banco, y descarga el resumen en PDF de cualquiera."
             badge={recientes.length > 0 ? recientes.length : null}
             onClick={() => setVista('procesos')}
           />
@@ -62,7 +62,7 @@ export default function AdminDashboard({ perfil, onLogout }) {
         </div>
       )}
 
-      {!cargando && vista === 'procesos' && <VistaProcesos corridas={corridas} />}
+      {!cargando && vista === 'procesos' && <VistaProcesos corridas={corridas} perfil={perfil} />}
       {!cargando && vista === 'kpis' && <VistaKPIs corridas={corridas} />}
     </AppShell>
   );
@@ -80,7 +80,7 @@ function BoxHome({ titulo, descripcion, badge, onClick }) {
   );
 }
 
-function VistaProcesos({ corridas }) {
+function VistaProcesos({ corridas, perfil }) {
   const [busqueda, setBusqueda] = useState('');
   const [filtroTipo, setFiltroTipo] = useState('todos');
   const [filtroBanco, setFiltroBanco] = useState('todos');
@@ -139,7 +139,7 @@ function VistaProcesos({ corridas }) {
       ) : (
         <div style={{ marginTop: 8 }}>
           {filtradas.map((c) => (
-            <CorridaRow key={c.id} corrida={c} />
+            <CorridaRow key={c.id} corrida={c} perfil={perfil} />
           ))}
         </div>
       )}
@@ -147,19 +147,17 @@ function VistaProcesos({ corridas }) {
   );
 }
 
-function CorridaRow({ corrida: c }) {
+function CorridaRow({ corrida: c, perfil }) {
   const [descargando, setDescargando] = useState(null);
   const [descargandoDetalle, setDescargandoDetalle] = useState(false);
   const [error, setError] = useState('');
 
-  const [mostrandoForm, setMostrandoForm] = useState(false);
-  const [nota, setNota] = useState('');
-  const [anulando, setAnulando] = useState(false);
-  const [anuladaLocal, setAnuladaLocal] = useState(false);
-  const [notaLocal, setNotaLocal] = useState('');
+  const [marcando, setMarcando] = useState(null);
+  const [subidoBancoLocal, setSubidoBancoLocal] = useState({});
 
-  const anulada = c.anulada || anuladaLocal;
-  const notaAnulacion = c.notaAnulacion || notaLocal;
+  const anulada = c.anulada;
+  const notaAnulacion = c.notaAnulacion;
+  const subidoBancoEfectivo = { ...(c.subidoBanco || {}), ...subidoBancoLocal };
 
   function descargarPdf() {
     const f = new Date(c.fecha);
@@ -224,23 +222,21 @@ function CorridaRow({ corrida: c }) {
     }
   }
 
-  async function confirmarAnulacion() {
-    if (!nota.trim()) {
-      setError('Escribe una nota explicando por qué se anula.');
-      return;
-    }
+  async function marcarSubido(banco) {
     setError('');
-    setAnulando(true);
+    setMarcando(banco);
     try {
-      await anularCorrida(c.id, nota);
-      setAnuladaLocal(true);
-      setNotaLocal(nota.trim());
-      setMostrandoForm(false);
+      const nombreQuienConfirma = perfil?.nombre || 'Admin';
+      await marcarSubidoBanco(c.id, banco, nombreQuienConfirma);
+      setSubidoBancoLocal((prev) => ({
+        ...prev,
+        [banco]: { at: new Date().toISOString(), por: nombreQuienConfirma },
+      }));
     } catch (err) {
       console.error(err);
-      setError('No se pudo anular: ' + err.message);
+      setError(`No se pudo confirmar la subida a ${LABEL_BANCO[banco]}: ` + err.message);
     } finally {
-      setAnulando(false);
+      setMarcando(null);
     }
   }
 
@@ -271,18 +267,26 @@ function CorridaRow({ corrida: c }) {
 
       <div style={{ marginTop: 14, display: 'flex', justifyContent: 'space-between', alignItems: 'flex-end', flexWrap: 'wrap', gap: 16 }}>
         <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-          {Object.entries(c.detalle_bancos || {}).map(([banco, info]) => (
-            <div key={banco} style={{ display: 'flex', alignItems: 'center', gap: 8, borderLeft: `2px solid ${COLOR_BANCO[banco]}`, paddingLeft: 8 }}>
-              <span className="mono" style={{ fontSize: 12 }}>
-                {LABEL_BANCO[banco]} · {info.registros} reg. · ${info.total?.toFixed(2)}
-              </span>
-            </div>
-          ))}
+          {Object.entries(c.detalle_bancos || {}).map(([banco, info]) => {
+            const subido = subidoBancoEfectivo[banco];
+            return (
+              <div key={banco} style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', borderLeft: `2px solid ${COLOR_BANCO[banco]}`, paddingLeft: 8 }}>
+                <span className="mono" style={{ fontSize: 12 }}>
+                  {LABEL_BANCO[banco]} · {info.registros} reg. · ${info.total?.toFixed(2)}
+                </span>
+                {subido ? (
+                  <span style={badgeSubido}>✓ Subido {new Date(subido.at).toLocaleDateString('es-EC')} · {subido.por}</span>
+                ) : (
+                  <span style={badgePendienteSubida}>Pendiente de subir al banco</span>
+                )}
+              </div>
+            );
+          })}
           {c.registros_con_error > 0 && (
             <span style={{ fontSize: 12, color: 'var(--err)' }}>{c.registros_con_error} error(es)</span>
           )}
         </div>
-        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', justifyContent: 'flex-end' }}>
           {Object.keys(c.detalle_bancos || {}).map((banco) => (
             <button key={banco} onClick={() => descargarTxt(banco)} disabled={descargando === banco} style={btnGhost}>
               {descargando === banco ? '…' : `${LABEL_BANCO[banco]} · .txt`}
@@ -292,32 +296,18 @@ function CorridaRow({ corrida: c }) {
           <button onClick={descargarDetalle} disabled={descargandoDetalle} style={btnGhost}>
             {descargandoDetalle ? '…' : 'Descargar detalle'}
           </button>
-          {!anulada && !mostrandoForm && (
-            <button onClick={() => setMostrandoForm(true)} style={btnAnular}>Anular</button>
-          )}
         </div>
       </div>
 
-      {mostrandoForm && (
-        <div style={{ marginTop: 12, padding: 12, background: 'var(--err-bg)', borderRadius: 8 }}>
-          <label style={{ fontSize: 12, fontWeight: 600, color: 'var(--err)', display: 'block', marginBottom: 6 }}>
-            ¿Por qué se anula esta corrida?
-          </label>
-          <textarea
-            value={nota}
-            onChange={(e) => setNota(e.target.value)}
-            rows={2}
-            placeholder="Ej: monto duplicado, se generó con el archivo equivocado…"
-            style={notaInput}
-          />
-          <div style={{ display: 'flex', gap: 8, marginTop: 8 }}>
-            <button onClick={confirmarAnulacion} disabled={anulando} style={btnConfirmarAnular}>
-              {anulando ? 'Anulando…' : 'Confirmar anulación'}
-            </button>
-            <button onClick={() => { setMostrandoForm(false); setNota(''); setError(''); }} style={btnGhost}>
-              Cancelar
-            </button>
-          </div>
+      {!anulada && (
+        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', justifyContent: 'flex-end', marginTop: 10 }}>
+          {Object.keys(c.detalle_bancos || {})
+            .filter((banco) => !subidoBancoEfectivo[banco])
+            .map((banco) => (
+              <button key={`subir-${banco}`} onClick={() => marcarSubido(banco)} disabled={marcando === banco} style={btnConfirmarSubido}>
+                {marcando === banco ? 'Confirmando…' : `Confirmar subido a ${LABEL_BANCO[banco]}`}
+              </button>
+            ))}
         </div>
       )}
 
@@ -452,6 +442,6 @@ const statCard = { background: '#fff', border: '1px solid var(--line)', borderRa
 const barTrack = { background: 'var(--line-soft)', borderRadius: 6, height: 9, overflow: 'hidden' };
 const barFill = { height: '100%', borderRadius: 6 };
 const badgeAnulada = { fontSize: 10.5, fontWeight: 700, color: 'var(--err)', background: 'var(--err-bg)', borderRadius: 5, padding: '2px 7px' };
-const btnAnular = { background: '#fff', border: '1.5px solid var(--err)', color: 'var(--err)', borderRadius: 8, padding: '8px 14px', fontSize: 12.5, cursor: 'pointer', fontFamily: 'inherit' };
-const btnConfirmarAnular = { background: 'var(--err)', color: '#fff', border: 'none', borderRadius: 8, padding: '8px 14px', fontSize: 12.5, fontWeight: 600, cursor: 'pointer', fontFamily: 'inherit' };
-const notaInput = { width: '100%', border: '1.5px solid var(--line)', borderRadius: 8, padding: '8px 10px', fontSize: 13, fontFamily: 'inherit', resize: 'vertical' };
+const badgeSubido = { fontSize: 10.5, fontWeight: 700, color: 'var(--ok)', background: 'rgba(22,163,74,0.12)', borderRadius: 5, padding: '2px 7px', whiteSpace: 'nowrap' };
+const badgePendienteSubida = { fontSize: 10.5, fontWeight: 700, color: 'var(--warn)', background: 'var(--warn-bg)', borderRadius: 5, padding: '2px 7px', whiteSpace: 'nowrap' };
+const btnConfirmarSubido = { background: '#fff', border: '1.5px solid var(--ok)', color: 'var(--ok)', borderRadius: 8, padding: '7px 12px', fontSize: 12, fontWeight: 600, cursor: 'pointer', fontFamily: 'inherit' };

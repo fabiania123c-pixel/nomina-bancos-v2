@@ -1,5 +1,11 @@
 import { supabase } from './supabaseClient.js';
 
+const COLUMNAS_SUBIDO = {
+  produbanco: { at: 'subido_produbanco_at', por: 'subido_produbanco_por' },
+  pichincha: { at: 'subido_pichincha_at', por: 'subido_pichincha_por' },
+  guayaquil: { at: 'subido_guayaquil_at', por: 'subido_guayaquil_por' },
+};
+
 export async function getPerfilActual() {
   const {
     data: { user },
@@ -23,7 +29,9 @@ export async function getHistorialCorridas(limite = 50) {
   const { data, error } = await supabase
     .from('corridas')
     .select(
-      'id, tipo, generado_por, fecha, detalle_bancos, registros_con_error, finalizado, finalizado_en, profiles(nombre), corrida_anulaciones(nota, creado_en)'
+      'id, tipo, generado_por, fecha, detalle_bancos, registros_con_error, finalizado, finalizado_en, ' +
+        'subido_produbanco_at, subido_produbanco_por, subido_pichincha_at, subido_pichincha_por, subido_guayaquil_at, subido_guayaquil_por, ' +
+        'profiles(nombre), corrida_anulaciones(nota, creado_en)'
     )
     .order('fecha', { ascending: false })
     .limit(limite);
@@ -34,11 +42,16 @@ export async function getHistorialCorridas(limite = 50) {
   }
   return data.map((c) => {
     const anulacion = Array.isArray(c.corrida_anulaciones) ? c.corrida_anulaciones[0] : c.corrida_anulaciones;
+    const subidoBanco = {};
+    for (const [banco, cols] of Object.entries(COLUMNAS_SUBIDO)) {
+      subidoBanco[banco] = c[cols.at] ? { at: c[cols.at], por: c[cols.por] } : null;
+    }
     return {
       ...c,
       generadoPorNombre: c.profiles?.nombre || 'Desconocido',
       anulada: !!anulacion,
       notaAnulacion: anulacion?.nota || null,
+      subidoBanco,
     };
   });
 }
@@ -110,6 +123,31 @@ export async function anularCorrida(corridaId, nota) {
   const { error } = await supabase
     .from('corrida_anulaciones')
     .insert({ corrida_id: corridaId, anulado_por: user.id, nota: nota.trim() });
+
+  if (error) throw error;
+}
+
+/**
+ * Marca que los archivos de un banco específico de esta corrida ya se
+ * subieron al portal de cash management de ese banco. Solo debería poder
+ * llamarlo un Admin (lo hace cumplir la política de la tabla sobre
+ * `corridas`, igual que las demás operaciones de este archivo).
+ *
+ * @param {string} corridaId
+ * @param {'produbanco'|'pichincha'|'guayaquil'} banco
+ * @param {string} nombreQuienConfirma - nombre a mostrar (ej. perfil.nombre del Admin que confirma)
+ */
+export async function marcarSubidoBanco(corridaId, banco, nombreQuienConfirma) {
+  const cols = COLUMNAS_SUBIDO[banco];
+  if (!cols) throw new Error(`Banco "${banco}" no reconocido.`);
+
+  const { error } = await supabase
+    .from('corridas')
+    .update({
+      [cols.at]: new Date().toISOString(),
+      [cols.por]: nombreQuienConfirma,
+    })
+    .eq('id', corridaId);
 
   if (error) throw error;
 }

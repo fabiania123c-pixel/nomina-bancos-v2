@@ -1,10 +1,12 @@
 import { useEffect, useState } from 'react';
 import AppShell from '../components/AppShell.jsx';
 import { getHistorialCorridas, getArchivosCorrida, marcarSubidoBanco } from '../lib/historial.js';
-import { calcularKPIs, corridasRecientes, calcularPorPersona, LABEL_BANCO } from '../lib/kpis.js';
+import { calcularKPIs, corridasRecientes, calcularPorPersona, filtrarPorEmpresa, LABEL_BANCO } from '../lib/kpis.js';
 import { descargarPdfResumen } from '../lib/pdf.js';
 import { descargarDetalleExcel } from '../lib/detalleExport.js';
-import { buildFileContent, BANK_PROFILES } from '../lib/bankProfiles.js';
+import { buildFileContent } from '../lib/bankProfiles.js';
+import { EMPRESAS, EMPRESAS_KEYS } from '../lib/empresas.js';
+import { nombreArchivoBanco, nombrePdfResumen } from '../lib/nombresArchivo.js';
 import { useConteo } from '../lib/useConteo.js';
 
 const LABEL_TIPO = {
@@ -20,6 +22,8 @@ export default function AdminDashboard({ perfil, onLogout }) {
   const [corridas, setCorridas] = useState([]);
   const [cargando, setCargando] = useState(true);
   const [vista, setVista] = useState('home');
+  // 'consolidado' = las 3 empresas juntas; si no, 'superdeporte' | 'equinox' | 'medeport'
+  const [filtroEmpresa, setFiltroEmpresa] = useState('consolidado');
 
   useEffect(() => {
     getHistorialCorridas(500).then((data) => {
@@ -29,6 +33,7 @@ export default function AdminDashboard({ perfil, onLogout }) {
   }, []);
 
   const recientes = corridasRecientes(corridas, 48);
+  const corridasVista = filtrarPorEmpresa(corridas, filtroEmpresa);
 
   const nav = [
     { label: 'Inicio', active: vista === 'home', onClick: () => setVista('home') },
@@ -46,6 +51,19 @@ export default function AdminDashboard({ perfil, onLogout }) {
 
       {cargando && <p style={{ color: 'var(--muted)' }}>Cargando…</p>}
 
+      {!cargando && vista !== 'home' && (
+        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: 18 }}>
+          <button type="button" onClick={() => setFiltroEmpresa('consolidado')} style={filtroEmpresa === 'consolidado' ? pillActivo : pillInactivo}>
+            Consolidado
+          </button>
+          {EMPRESAS_KEYS.map((key) => (
+            <button key={key} type="button" onClick={() => setFiltroEmpresa(key)} style={filtroEmpresa === key ? pillActivo : pillInactivo}>
+              {EMPRESAS[key].label}
+            </button>
+          ))}
+        </div>
+      )}
+
       {!cargando && vista === 'home' && (
         <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap', marginTop: 28 }}>
           <BoxHome
@@ -62,8 +80,8 @@ export default function AdminDashboard({ perfil, onLogout }) {
         </div>
       )}
 
-      {!cargando && vista === 'procesos' && <VistaProcesos corridas={corridas} perfil={perfil} />}
-      {!cargando && vista === 'kpis' && <VistaKPIs corridas={corridas} />}
+      {!cargando && vista === 'procesos' && <VistaProcesos corridas={corridasVista} perfil={perfil} />}
+      {!cargando && vista === 'kpis' && <VistaKPIs corridas={corridasVista} mostrarPorEmpresa={filtroEmpresa === 'consolidado'} />}
     </AppShell>
   );
 }
@@ -93,7 +111,7 @@ function VistaProcesos({ corridas, perfil }) {
         </svg>
         <p style={{ fontWeight: 600, fontSize: 14, margin: '10px 0 2px' }}>Todavía no hay nada aquí</p>
         <p style={{ fontSize: 12.5, color: 'var(--muted)', margin: 0 }}>
-          En cuanto Santiago finalice una corrida, va a aparecer en esta lista.
+          En cuanto se finalice una corrida de esta selección, va a aparecer en esta lista.
         </p>
       </div>
     );
@@ -159,16 +177,21 @@ function CorridaRow({ corrida: c, perfil }) {
   const notaAnulacion = c.notaAnulacion;
   const subidoBancoEfectivo = { ...(c.subidoBanco || {}), ...subidoBancoLocal };
 
+  const empresa = c.empresa || 'superdeporte';
+  const fechaCorrida = new Date(c.fecha);
+  const ddF = String(fechaCorrida.getDate()).padStart(2, '0');
+  const mmF = String(fechaCorrida.getMonth() + 1).padStart(2, '0');
+  const yyyyF = String(fechaCorrida.getFullYear());
+
   function descargarPdf() {
-    const f = new Date(c.fecha);
-    const mmF = String(f.getMonth() + 1).padStart(2, '0');
     descargarPdfResumen({
       tipo: c.tipo,
-      periodo: `MES-${mmF}-${f.getFullYear()}`,
-      fecha: f.toLocaleDateString('es-EC'),
+      empresa: EMPRESAS[empresa]?.label,
+      periodo: `MES-${mmF}-${yyyyF}`,
+      fecha: `${ddF}/${mmF}/${yyyyF}`,
       generadoPor: c.generadoPorNombre,
       detalleBancos: c.detalle_bancos,
-      filename: `resumen-${f.toISOString().slice(0, 10)}.pdf`,
+      filename: nombrePdfResumen({ empresa, dd: ddF, mm: mmF, yyyy: yyyyF }),
     });
   }
 
@@ -181,8 +204,9 @@ function CorridaRow({ corrida: c, perfil }) {
         setError('No se encontró el archivo guardado para esta corrida.');
         return;
       }
-      const content = buildFileContent(banco, archivos.filas_por_banco[banco], archivos.ctx);
-      const filename = BANK_PROFILES[banco].filename(archivos.ctx);
+      const ctx = { ...archivos.ctx, empresa, secuencia: c.secuencia_guayaquil ?? archivos.ctx?.secuencia ?? null };
+      const content = buildFileContent(banco, archivos.filas_por_banco[banco], ctx);
+      const filename = nombreArchivoBanco(banco, ctx);
       const blob = new Blob([content], { type: 'text/plain;charset=utf-8' });
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
@@ -212,7 +236,7 @@ function CorridaRow({ corrida: c, perfil }) {
       await descargarDetalleExcel({
         resultado: archivos.filas_por_banco,
         tipo: c.tipo,
-        filename: `detalle-${new Date(c.fecha).toISOString().slice(0, 10)}.xlsx`,
+        filename: `detalle-nomina-${EMPRESAS[empresa]?.abrev || 'Super'}-${ddF}${mmF}${yyyyF}.xlsx`,
       });
     } catch (err) {
       console.error(err);
@@ -246,6 +270,7 @@ function CorridaRow({ corrida: c, perfil }) {
         <div>
           <div style={{ fontWeight: 600, fontSize: 14 }}>
             {LABEL_TIPO[c.tipo] || c.tipo}
+            <span style={badgeEmpresa}>{EMPRESAS[empresa]?.label || empresa}</span>
             {anulada && <span style={{ ...badgeAnulada, marginLeft: 8 }}>Anulada</span>}
           </div>
           <div style={{ fontSize: 12, color: 'var(--muted)', marginTop: 3 }}>
@@ -316,12 +341,13 @@ function CorridaRow({ corrida: c, perfil }) {
   );
 }
 
-function VistaKPIs({ corridas }) {
+function VistaKPIs({ corridas, mostrarPorEmpresa }) {
   const k = calcularKPIs(corridas);
   const porPersona = calcularPorPersona(corridas);
   const maxBanco = Math.max(1, ...Object.values(k.porBanco).map((b) => b.total));
   const maxTipo = Math.max(1, ...Object.values(k.porTipo).map((t) => t.total));
   const maxMes = Math.max(1, ...k.tendenciaMensual.map(([, total]) => total));
+  const maxEmpresa = Math.max(1, ...Object.values(k.porEmpresa).map((e) => e.total));
   const maxPersona = Math.max(1, ...porPersona.map((p) => p.total));
 
   return (
@@ -336,6 +362,20 @@ function VistaKPIs({ corridas }) {
         <StatCard label="Corridas finalizadas" numero={k.corridasFinalizadas} sufijo={` / ${k.totalCorridas}`} />
         <StatCard label="Errores acumulados" numero={k.erroresGeneral} alerta={k.erroresGeneral > 0} />
       </div>
+
+      {mostrarPorEmpresa && Object.keys(k.porEmpresa).length > 0 && (
+        <ChartSection title="Por empresa">
+          {Object.entries(k.porEmpresa).map(([emp, info]) => (
+            <BarRow
+              key={emp}
+              label={`${EMPRESAS[emp]?.label || emp} · ${info.corridas} corrida${info.corridas !== 1 ? 's' : ''}`}
+              value={`${info.registros} reg. · $${info.total.toLocaleString('en-US', { minimumFractionDigits: 2 })}`}
+              pct={(info.total / maxEmpresa) * 100}
+              color="var(--accent)"
+            />
+          ))}
+        </ChartSection>
+      )}
 
       <ChartSection title="Por banco">
         {Object.entries(k.porBanco).map(([banco, info]) => (
@@ -445,3 +485,6 @@ const badgeAnulada = { fontSize: 10.5, fontWeight: 700, color: 'var(--err)', bac
 const badgeSubido = { fontSize: 10.5, fontWeight: 700, color: 'var(--ok)', background: 'rgba(22,163,74,0.12)', borderRadius: 5, padding: '2px 7px', whiteSpace: 'nowrap' };
 const badgePendienteSubida = { fontSize: 10.5, fontWeight: 700, color: 'var(--warn)', background: 'var(--warn-bg)', borderRadius: 5, padding: '2px 7px', whiteSpace: 'nowrap' };
 const btnConfirmarSubido = { background: '#fff', border: '1.5px solid var(--ok)', color: 'var(--ok)', borderRadius: 8, padding: '7px 12px', fontSize: 12, fontWeight: 600, cursor: 'pointer', fontFamily: 'inherit' };
+const pillActivo = { background: 'var(--accent)', color: '#fff', border: '1.5px solid var(--accent)', borderRadius: 20, padding: '8px 16px', fontSize: 12.5, fontWeight: 600, cursor: 'pointer', fontFamily: 'inherit' };
+const pillInactivo = { background: '#fff', color: 'var(--ink)', border: '1.5px solid var(--line)', borderRadius: 20, padding: '8px 16px', fontSize: 12.5, fontWeight: 600, cursor: 'pointer', fontFamily: 'inherit' };
+const badgeEmpresa = { fontSize: 10.5, fontWeight: 700, color: 'var(--accent)', background: 'var(--line-soft)', borderRadius: 5, padding: '2px 7px', marginLeft: 8, whiteSpace: 'nowrap' };

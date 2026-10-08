@@ -1,3 +1,10 @@
+// Filtra por empresa. 'consolidado' (o vacío) deja todo; si no, solo esa empresa.
+// Las corridas viejas sin empresa cuentan como Superdeporte.
+export function filtrarPorEmpresa(corridas, empresa) {
+  if (!empresa || empresa === 'consolidado') return corridas;
+  return corridas.filter((c) => (c.empresa || 'superdeporte') === empresa);
+}
+
 export const LABEL_BANCO = {
   produbanco: 'Produbanco',
   pichincha: 'Banco Pichincha',
@@ -16,6 +23,7 @@ export function calcularKPIs(corridasConAnuladas) {
   // nomina_regular en corridas viejas, así que cada tipo que aparezca se crea solo.
   const porTipo = {};
   const porMes = new Map();
+  const porEmpresa = {};
 
   let totalGeneral = 0;
   let registrosGeneral = 0;
@@ -42,6 +50,14 @@ export function calcularKPIs(corridasConAnuladas) {
     porTipo[c.tipo].corridas += 1;
     porTipo[c.tipo].total += totalCorrida;
 
+    const emp = c.empresa || 'superdeporte';
+    if (!porEmpresa[emp]) porEmpresa[emp] = { registros: 0, total: 0, corridas: 0 };
+    porEmpresa[emp].corridas += 1;
+    porEmpresa[emp].total += totalCorrida;
+    Object.values(c.detalle_bancos || {}).forEach((info) => {
+      porEmpresa[emp].registros += info.registros || 0;
+    });
+
     porMes.set(mesKey, (porMes.get(mesKey) || 0) + totalCorrida);
   });
 
@@ -58,6 +74,7 @@ export function calcularKPIs(corridasConAnuladas) {
     totalCorridas: corridas.length,
     porBanco,
     porTipo,
+    porEmpresa,
     tendenciaMensual,
   };
 }
@@ -86,9 +103,11 @@ export function calcularPorPersona(corridasConAnuladas) {
     .sort((a, b) => b.total - a.total);
 }
 
-export function compararConHistorico(detalleActual, corridasHistoricasConAnuladas, tipo) {
+// `empresa` (opcional): compara solo contra corridas de esa misma empresa, para que
+// el promedio de Superdeporte no distorsione los avisos de Equinox o Medeport.
+export function compararConHistorico(detalleActual, corridasHistoricasConAnuladas, tipo, empresa) {
   const avisos = [];
-  const mismasTipo = corridasHistoricasConAnuladas.filter((c) => !c.anulada && c.tipo === tipo);
+  const mismasTipo = filtrarPorEmpresa(corridasHistoricasConAnuladas, empresa).filter((c) => !c.anulada && c.tipo === tipo);
   if (mismasTipo.length < 2) return avisos;
 
   Object.entries(detalleActual).forEach(([banco, info]) => {

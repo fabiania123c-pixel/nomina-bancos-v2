@@ -27,7 +27,7 @@ function formatoPeriodoLegible(periodo) {
   return `${MESES_LABEL[mm] || mm} ${yyyy}`;
 }
 
-export function descargarPdfResumen({ tipo, periodo, fecha, generadoPor, detalleBancos, filename }) {
+export function descargarPdfResumen({ tipo, empresa, periodo, fecha, generadoPor, detalleBancos, filename }) {
   const doc = new jsPDF();
   let y = 20;
 
@@ -39,6 +39,10 @@ export function descargarPdfResumen({ tipo, periodo, fecha, generadoPor, detalle
   y += 10;
 
   doc.setFontSize(11);
+  if (empresa) {
+    doc.text(`Empresa: ${empresa}`, 14, y);
+    y += 7;
+  }
   doc.text(`Tipo: ${LABEL_TIPO[tipo] || tipo}`, 14, y);
   y += 7;
   doc.text(`Periodo: ${formatoPeriodoLegible(periodo)}`, 14, y);

@@ -2,11 +2,13 @@ import { useState, useEffect } from 'react';
 import AppShell from '../components/AppShell.jsx';
 import { parseDataMadre, parseArchivoPago } from '../lib/excelParser.js';
 import { cruzarConDataMadre } from '../lib/cruce.js';
-import { buildFileContent, BANK_PROFILES } from '../lib/bankProfiles.js';
-import { registrarCorrida, finalizarCorrida, registrarArchivosCorrida, getHistorialCorridas } from '../lib/historial.js';
+import { buildFileContent } from '../lib/bankProfiles.js';
+import { registrarCorridaFinal, getHistorialCorridas, getMisEmpresas } from '../lib/historial.js';
+import { EMPRESAS, EMPRESAS_KEYS } from '../lib/empresas.js';
+import { nombreArchivoBanco, nombrePdfResumen } from '../lib/nombresArchivo.js';
 import { descargarPdfResumen } from '../lib/pdf.js';
 import { descargarDetalleExcel } from '../lib/detalleExport.js';
-import { compararConHistorico, calcularKPIs, calcularPorPersona, LABEL_BANCO } from '../lib/kpis.js';
+import { compararConHistorico, calcularKPIs, calcularPorPersona, filtrarPorEmpresa, LABEL_BANCO } from '../lib/kpis.js';
 
 const COLOR_BANCO = { produbanco: 'var(--bank-produbanco)', pichincha: 'var(--bank-pichincha)', guayaquil: 'var(--bank-guayaquil)' };
 
@@ -32,14 +34,6 @@ const LABEL_ARCHIVO_PAGO = {
   teletrabajo: 'Archivo de teletrabajo',
 };
 
-// cuentaOrigen/ruc de Equinox y Medeport quedan vacíos hasta que se confirmen
-// los reales — mientras tanto el campo sigue editable a mano para esos dos.
-const EMPRESAS = {
-  superdeporte: { label: 'Superdeporte', cuentaOrigen: '01005024240', ruc: '1791413237001' },
-  equinox: { label: 'Equinox', cuentaOrigen: '', ruc: '' },
-  medeport: { label: 'Medeport', cuentaOrigen: '', ruc: '' },
-};
-
 export default function OperadorDashboard({ perfil, onLogout }) {
   const hoy = new Date();
   const mm = String(hoy.getMonth() + 1).padStart(2, '0');
@@ -49,9 +43,11 @@ export default function OperadorDashboard({ perfil, onLogout }) {
   const [vista, setVista] = useState('generar');
 
   const [tipo, setTipo] = useState('finiquito');
-  const [empresa, setEmpresa] = useState('superdeporte');
-  const [cuentaOrigen, setCuentaOrigen] = useState(EMPRESAS.superdeporte.cuentaOrigen);
-  const [ruc, setRuc] = useState(EMPRESAS.superdeporte.ruc);
+  // Empresas que este usuario puede procesar (null = cargando). Las asigna el Admin en la base.
+  const [misEmpresas, setMisEmpresas] = useState(null);
+  const [empresa, setEmpresa] = useState('');
+  const cuentaOrigen = EMPRESAS[empresa]?.cuentaOrigen || '';
+  const ruc = EMPRESAS[empresa]?.ruc || '';
 
   const [dataMadreFile, setDataMadreFile] = useState(null);
   const [pagoFile, setPagoFile] = useState(null);
@@ -62,12 +58,19 @@ export default function OperadorDashboard({ perfil, onLogout }) {
 
   const [finalizando, setFinalizando] = useState(false);
   const [finalizado, setFinalizado] = useState(false);
+  // Contexto definitivo (fecha, empresa, consecutivo de Guayaquil) — existe SOLO después de finalizar.
+  const [finalCtx, setFinalCtx] = useState(null);
 
   const [historial, setHistorial] = useState([]);
   const [previaAbierta, setPreviaAbierta] = useState({});
 
   useEffect(() => {
     getHistorialCorridas(500).then(setHistorial);
+    getMisEmpresas().then((lista) => {
+      const validas = lista.filter((k) => EMPRESAS_KEYS.includes(k));
+      setMisEmpresas(validas);
+      setEmpresa((actual) => actual || validas[0] || '');
+    });
   }, []);
 
   const nav = [
@@ -75,16 +78,34 @@ export default function OperadorDashboard({ perfil, onLogout }) {
     { label: 'Dashboard de seguimiento', active: vista === 'seguimiento', onClick: () => setVista('seguimiento') },
   ];
 
+  // Cambiar empresa o tipo invalida lo ya procesado: hay que volver a procesar.
+  function limpiarResultado() {
+    setResultado(null);
+    setFinalizado(false);
+    setFinalCtx(null);
+    setPreviaAbierta({});
+    setErrorGeneral('');
+  }
+
   function handleEmpresaChange(key) {
     setEmpresa(key);
-    setCuentaOrigen(EMPRESAS[key].cuentaOrigen);
-    setRuc(EMPRESAS[key].ruc);
+    limpiarResultado();
+  }
+
+  function handleTipoChange(value) {
+    setTipo(value);
+    limpiarResultado();
   }
 
   async function procesar() {
     setErrorGeneral('');
     setResultado(null);
     setFinalizado(false);
+    setFinalCtx(null);
+    if (!empresa || !misEmpresas?.includes(empresa)) {
+      setErrorGeneral('No tienes ninguna empresa asignada para procesar — avísale a Fabián.');
+      return;
+    }
     if (!cuentaOrigen || !ruc) {
       setErrorGeneral(`${EMPRESAS[empresa].label} todavía no tiene cuenta origen / RUC configurados en el sistema — avísale a Fabián antes de continuar.`);
       return;
@@ -115,10 +136,12 @@ export default function OperadorDashboard({ perfil, onLogout }) {
     return { cuentaOrigen, ruc, mm, dd, yyyy };
   }
 
+  // Las descargas solo existen después de finalizar: usan finalCtx (con el consecutivo real).
   function descargarBanco(bancoKey) {
+    if (!finalCtx) return;
     const filas = resultado.resultado[bancoKey];
-    const content = buildFileContent(bancoKey, filas, ctxBase());
-    const filename = BANK_PROFILES[bancoKey].filename({ mm, dd, yyyy });
+    const content = buildFileContent(bancoKey, filas, finalCtx);
+    const filename = nombreArchivoBanco(bancoKey, finalCtx);
     const blob = new Blob([content], { type: 'text/plain;charset=utf-8' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
@@ -142,22 +165,26 @@ export default function OperadorDashboard({ perfil, onLogout }) {
   }
 
   function descargarPdf() {
+    if (!finalCtx) return;
+    const { dd: d, mm: m, yyyy: y } = finalCtx;
     descargarPdfResumen({
       tipo,
-      periodo: `MES-${mm}-${yyyy}`,
-      fecha: `${dd}/${mm}/${yyyy}`,
+      empresa: EMPRESAS[finalCtx.empresa]?.label,
+      periodo: `MES-${m}-${y}`,
+      fecha: `${d}/${m}/${y}`,
       generadoPor: perfil.nombre,
       detalleBancos: detalleBancos(),
-      filename: `resumen-nomina-${dd}${mm}${yyyy}.pdf`,
+      filename: nombrePdfResumen({ empresa: finalCtx.empresa, dd: d, mm: m, yyyy: y }),
     });
   }
 
   async function descargarDetalle() {
+    if (!finalCtx) return;
     try {
       await descargarDetalleExcel({
         resultado: resultado.resultado,
         tipo,
-        filename: `detalle-nomina-${dd}${mm}${yyyy}.xlsx`,
+        filename: `detalle-nomina-${EMPRESAS[finalCtx.empresa]?.abrev || 'Super'}-${finalCtx.dd}${finalCtx.mm}${finalCtx.yyyy}.xlsx`,
       });
     } catch (err) {
       console.error(err);
@@ -165,21 +192,33 @@ export default function OperadorDashboard({ perfil, onLogout }) {
     }
   }
 
+  // Finalizar = guardar en el servidor (de forma atómica) y recién ahí habilitar las descargas.
   async function handleFinalizar() {
     setFinalizando(true);
+    setErrorGeneral('');
     try {
-      const corrida = await registrarCorrida({
+      // La fecha se toma AHORA (no al abrir la pantalla) para que cuadre con el consecutivo del día.
+      const ahora = new Date();
+      const y = String(ahora.getFullYear());
+      const m = String(ahora.getMonth() + 1).padStart(2, '0');
+      const d = String(ahora.getDate()).padStart(2, '0');
+      const ctx = { cuentaOrigen, ruc, mm: m, dd: d, yyyy: y };
+
+      const corrida = await registrarCorridaFinal({
         tipo,
+        empresa,
         detalleBancos: detalleBancos(),
         registrosConError: resultado.errores.length,
+        dia: `${y}-${m}-${d}`,
+        filasPorBanco: resultado.resultado,
+        ctx,
       });
-      await registrarArchivosCorrida(corrida.id, resultado.resultado, ctxBase());
-      await finalizarCorrida(corrida.id);
+      setFinalCtx({ ...ctx, empresa, secuencia: corrida.secuencia_guayaquil ?? null });
       setFinalizado(true);
       getHistorialCorridas(500).then(setHistorial);
     } catch (err) {
       console.error(err);
-      setErrorGeneral('No se pudo registrar la corrida: ' + err.message);
+      setErrorGeneral('No se pudo finalizar el proceso: ' + err.message);
     } finally {
       setFinalizando(false);
     }
@@ -188,7 +227,7 @@ export default function OperadorDashboard({ perfil, onLogout }) {
   const hayErrores = resultado && resultado.errores.length > 0;
   const hayResultados =
     resultado && !hayErrores && Object.values(resultado.resultado).some((f) => f.length > 0);
-  const avisosHistorico = hayResultados ? compararConHistorico(detalleBancos(), historial, tipo) : [];
+  const avisosHistorico = hayResultados ? compararConHistorico(detalleBancos(), historial, tipo, empresa) : [];
   const hayAdvertencias =
     (resultado && resultado.advertencias && resultado.advertencias.length > 0) || avisosHistorico.length > 0;
 
@@ -207,7 +246,7 @@ export default function OperadorDashboard({ perfil, onLogout }) {
                     <button
                       key={t.value}
                       type="button"
-                      onClick={() => setTipo(t.value)}
+                      onClick={() => handleTipoChange(t.value)}
                       style={tipo === t.value ? pillActivo : pillInactivo}
                     >
                       {t.label}
@@ -216,11 +255,19 @@ export default function OperadorDashboard({ perfil, onLogout }) {
                 </div>
               </Field>
               <Field label="Empresa">
-                <select value={empresa} onChange={(e) => handleEmpresaChange(e.target.value)} style={input}>
-                  {Object.entries(EMPRESAS).map(([key, e]) => (
-                    <option key={key} value={key}>{e.label}</option>
-                  ))}
-                </select>
+                {misEmpresas === null ? (
+                  <div style={fechaAuto}>Cargando…</div>
+                ) : misEmpresas.length > 1 ? (
+                  <select value={empresa} onChange={(e) => handleEmpresaChange(e.target.value)} style={input}>
+                    {misEmpresas.map((key) => (
+                      <option key={key} value={key}>{EMPRESAS[key].label}</option>
+                    ))}
+                  </select>
+                ) : misEmpresas.length === 1 ? (
+                  <div style={fechaAuto}>{EMPRESAS[misEmpresas[0]].label}</div>
+                ) : (
+                  <div style={{ ...fechaAuto, color: 'var(--err)' }}>Sin empresa asignada</div>
+                )}
               </Field>
               <Field label="Fecha de la corrida">
                 <div className="mono" style={fechaAuto}>{dd}/{mm}/{yyyy}</div>
@@ -247,9 +294,12 @@ export default function OperadorDashboard({ perfil, onLogout }) {
                 accept=".xlsx"
               />
             </div>
-            <button onClick={procesar} disabled={procesando} style={{ ...btnPrimary, marginTop: 20 }}>
+            <button onClick={procesar} disabled={procesando || !misEmpresas || misEmpresas.length === 0} style={{ ...btnPrimary, marginTop: 20 }}>
               {procesando ? 'Procesando…' : 'Procesar'}
             </button>
+            {misEmpresas && misEmpresas.length === 0 && (
+              <div style={errBox}>Tu usuario no tiene ninguna empresa asignada. Avísale a Fabián para que te la asigne.</div>
+            )}
             {errorGeneral && <div style={errBox}>{errorGeneral}</div>}
           </Section>
 
@@ -296,7 +346,11 @@ export default function OperadorDashboard({ perfil, onLogout }) {
                       >
                         {previaAbierta[banco] ? 'Ocultar vista previa' : 'Vista previa'}
                       </button>
-                      <button onClick={() => descargarBanco(banco)} style={btnGhost}>Descargar .txt</button>
+                      {finalizado && finalCtx && (
+                        <button onClick={() => descargarBanco(banco)} style={btnGhost} title={nombreArchivoBanco(banco, finalCtx)}>
+                          Descargar .txt
+                        </button>
+                      )}
                     </div>
                   </div>
                   {previaAbierta[banco] && (
@@ -318,13 +372,29 @@ export default function OperadorDashboard({ perfil, onLogout }) {
               ))}
 
               <div style={{ display: 'flex', gap: 10, marginTop: 20, flexWrap: 'wrap' }}>
-                <button onClick={descargarPdf} style={btnGhost}>Descargar resumen PDF</button>
-                <button onClick={descargarDetalle} style={btnGhost}>Descargar detalle (Excel)</button>
-                <button onClick={handleFinalizar} disabled={finalizando || finalizado} style={btnPrimary}>
-                  {finalizado ? 'Proceso finalizado ✓' : finalizando ? 'Finalizando…' : 'Finalizar proceso'}
-                </button>
+                {finalizado && finalCtx ? (
+                  <>
+                    <button onClick={descargarPdf} style={btnGhost}>Descargar resumen PDF</button>
+                    <button onClick={descargarDetalle} style={btnGhost}>Descargar detalle (Excel)</button>
+                    <button disabled style={{ ...btnPrimary, opacity: 0.7, cursor: 'default' }}>Proceso finalizado ✓</button>
+                  </>
+                ) : (
+                  <button onClick={handleFinalizar} disabled={finalizando} style={btnPrimary}>
+                    {finalizando ? 'Finalizando…' : 'Finalizar proceso'}
+                  </button>
+                )}
               </div>
-              {finalizado && <p style={{ fontSize: 12.5, color: 'var(--ok)', marginTop: 10 }}>Registrado en el historial — el Admin ya lo puede ver.</p>}
+              {!finalizado && (
+                <p style={{ fontSize: 12.5, color: 'var(--muted)', marginTop: 10 }}>
+                  Revisa la vista previa. Al finalizar se registra el proceso y se habilitan las descargas (.txt, PDF y Excel).
+                </p>
+              )}
+              {finalizado && (
+                <p style={{ fontSize: 12.5, color: 'var(--ok)', marginTop: 10 }}>
+                  Registrado en el historial — el Admin ya lo puede ver.
+                  {finalCtx?.secuencia != null && ` Consecutivo Guayaquil de hoy: ${String(finalCtx.secuencia).padStart(2, '0')}.`}
+                </p>
+              )}
             </Section>
           )}
         </>
@@ -334,27 +404,33 @@ export default function OperadorDashboard({ perfil, onLogout }) {
         <>
           <h1 style={pageTitle}>Dashboard de seguimiento</h1>
           <p style={pageSubtitle}>Solo lectura — acá no se puede editar ni anular nada, es para que tengas visibilidad de todo lo que se ha corrido.</p>
-          <VistaSeguimiento corridas={historial} />
+          <VistaSeguimiento corridas={historial} empresasPermitidas={misEmpresas || []} />
         </>
       )}
     </AppShell>
   );
 }
 
-function VistaSeguimiento({ corridas }) {
+function VistaSeguimiento({ corridas: todas, empresasPermitidas }) {
+  const [filtroEmpresa, setFiltroEmpresa] = useState('consolidado');
   const [busqueda, setBusqueda] = useState('');
   const [filtroTipo, setFiltroTipo] = useState('todos');
   const [filtroBanco, setFiltroBanco] = useState('todos');
 
-  if (corridas.length === 0) {
+  if (todas.length === 0) {
     return <p style={{ color: 'var(--muted)', fontSize: 13, marginTop: 24 }}>Todavía no hay corridas registradas.</p>;
   }
+
+  // Selector de empresa solo si el usuario tiene más de una (Mayra y su equipo: Equinox / Medeport / Consolidado).
+  const hayVariasEmpresas = empresasPermitidas.length > 1;
+  const corridas = hayVariasEmpresas ? filtrarPorEmpresa(todas, filtroEmpresa) : todas;
 
   const k = calcularKPIs(corridas);
   const porPersona = calcularPorPersona(corridas);
   const maxBanco = Math.max(1, ...Object.values(k.porBanco).map((b) => b.total));
   const maxTipo = Math.max(1, ...Object.values(k.porTipo).map((t) => t.total));
   const maxMes = Math.max(1, ...k.tendenciaMensual.map(([, total]) => total));
+  const maxEmpresa = Math.max(1, ...Object.values(k.porEmpresa).map((e) => e.total));
   const maxPersona = Math.max(1, ...porPersona.map((p) => p.total));
 
   const filtradas = corridas.filter((c) => {
@@ -369,12 +445,38 @@ function VistaSeguimiento({ corridas }) {
 
   return (
     <div style={{ marginTop: 20 }}>
+      {hayVariasEmpresas && (
+        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 24 }}>
+          <button type="button" onClick={() => setFiltroEmpresa('consolidado')} style={filtroEmpresa === 'consolidado' ? pillActivo : pillInactivo}>
+            Consolidado
+          </button>
+          {empresasPermitidas.map((key) => (
+            <button key={key} type="button" onClick={() => setFiltroEmpresa(key)} style={filtroEmpresa === key ? pillActivo : pillInactivo}>
+              {EMPRESAS[key].label}
+            </button>
+          ))}
+        </div>
+      )}
       <div style={{ display: 'flex', gap: 14, flexWrap: 'wrap', marginBottom: 28 }}>
         <StatCardSeg label="Total histórico movido" valor={`$${k.totalGeneral.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`} />
         <StatCardSeg label="Registros procesados" valor={k.registrosGeneral.toLocaleString('en-US')} />
         <StatCardSeg label="Corridas finalizadas" valor={`${k.corridasFinalizadas} / ${k.totalCorridas}`} />
         <StatCardSeg label="Errores acumulados" valor={String(k.erroresGeneral)} alerta={k.erroresGeneral > 0} />
       </div>
+
+      {hayVariasEmpresas && filtroEmpresa === 'consolidado' && Object.keys(k.porEmpresa).length > 1 && (
+        <ChartSectionSeg title="Por empresa">
+          {Object.entries(k.porEmpresa).map(([emp, info]) => (
+            <BarRowSeg
+              key={emp}
+              label={`${EMPRESAS[emp]?.label || emp} · ${info.corridas} corrida${info.corridas !== 1 ? 's' : ''}`}
+              value={`${info.registros} reg. · $${info.total.toLocaleString('en-US', { minimumFractionDigits: 2 })}`}
+              pct={(info.total / maxEmpresa) * 100}
+              color="var(--accent)"
+            />
+          ))}
+        </ChartSectionSeg>
+      )}
 
       <ChartSectionSeg title="Por banco">
         {Object.entries(k.porBanco).map(([banco, info]) => (
@@ -471,6 +573,7 @@ function FilaSeguimiento({ corrida: c }) {
         <div>
           <div style={{ fontWeight: 600, fontSize: 14 }}>
             {LABEL_TIPO[c.tipo] || c.tipo}
+            <span style={badgeEmpresaSeg}>{EMPRESAS[c.empresa]?.label || 'Superdeporte'}</span>
             {anulada && <span style={{ ...badgeAnuladaSeg, marginLeft: 8 }}>Anulada</span>}
           </div>
           <div style={{ fontSize: 12, color: 'var(--muted)', marginTop: 3 }}>
@@ -638,3 +741,4 @@ const rowCardSeg = { padding: '16px 0', borderBottom: '1px solid var(--line-soft
 const badgeAnuladaSeg = { fontSize: 10.5, fontWeight: 700, color: 'var(--err)', background: 'var(--err-bg)', borderRadius: 5, padding: '2px 7px' };
 const badgeSubidoSeg = { fontSize: 10.5, fontWeight: 700, color: 'var(--ok)', background: 'rgba(22,163,74,0.12)', borderRadius: 5, padding: '2px 7px', whiteSpace: 'nowrap' };
 const badgePendienteSeg = { fontSize: 10.5, fontWeight: 700, color: 'var(--warn)', background: 'var(--warn-bg)', borderRadius: 5, padding: '2px 7px', whiteSpace: 'nowrap' };
+const badgeEmpresaSeg = { fontSize: 10.5, fontWeight: 700, color: 'var(--accent)', background: 'var(--line-soft)', borderRadius: 5, padding: '2px 7px', marginLeft: 8, whiteSpace: 'nowrap' };

@@ -25,11 +25,35 @@ export async function getPerfilActual() {
   return data;
 }
 
+/**
+ * Empresas que el usuario puede ver/procesar. Si es Admin, todas.
+ * (Se lee aparte de getPerfilActual para no tocar useAuth.)
+ */
+export async function getMisEmpresas() {
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  if (!user) return [];
+
+  const { data, error } = await supabase
+    .from('profiles')
+    .select('rol, empresas')
+    .eq('id', user.id)
+    .single();
+
+  if (error) {
+    console.error('Error leyendo las empresas del usuario:', error.message);
+    return [];
+  }
+  if (data.rol === 'admin') return ['superdeporte', 'equinox', 'medeport'];
+  return Array.isArray(data.empresas) ? data.empresas : [];
+}
+
 export async function getHistorialCorridas(limite = 50) {
   const { data, error } = await supabase
     .from('corridas')
     .select(
-      'id, tipo, generado_por, fecha, detalle_bancos, registros_con_error, finalizado, finalizado_en, ' +
+      'id, tipo, empresa, secuencia_guayaquil, generado_por, fecha, detalle_bancos, registros_con_error, finalizado, finalizado_en, ' +
         'subido_produbanco_at, subido_produbanco_por, subido_pichincha_at, subido_pichincha_por, subido_guayaquil_at, subido_guayaquil_por, ' +
         'profiles(nombre), corrida_anulaciones(nota, creado_en)'
     )
@@ -48,6 +72,7 @@ export async function getHistorialCorridas(limite = 50) {
     }
     return {
       ...c,
+      empresa: c.empresa || 'superdeporte',
       generadoPorNombre: c.profiles?.nombre || 'Desconocido',
       anulada: !!anulacion,
       notaAnulacion: anulacion?.nota || null,
@@ -56,42 +81,38 @@ export async function getHistorialCorridas(limite = 50) {
   });
 }
 
-export async function registrarCorrida({ tipo, detalleBancos, registrosConError = 0 }) {
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
-  if (!user) throw new Error('No hay sesión activa');
-
-  const { data, error } = await supabase
-    .from('corridas')
-    .insert({
-      tipo,
-      generado_por: user.id,
-      detalle_bancos: detalleBancos,
-      registros_con_error: registrosConError,
-    })
-    .select()
-    .single();
-
-  if (error) throw error;
-  return data;
-}
-
-export async function finalizarCorrida(corridaId) {
-  const { error } = await supabase
-    .from('corridas')
-    .update({ finalizado: true, finalizado_en: new Date().toISOString() })
-    .eq('id', corridaId);
-
-  if (error) throw error;
-}
-
-export async function registrarArchivosCorrida(corridaId, filasPorBanco, ctx) {
-  const { error } = await supabase
-    .from('corrida_archivos')
-    .insert({ corrida_id: corridaId, filas_por_banco: filasPorBanco, ctx });
+/**
+ * Registra y finaliza una corrida en UN solo paso (función del servidor
+ * `registrar_corrida`). Asigna el consecutivo de Guayaquil de forma atómica:
+ * uno por empresa y por día, sin huecos ni repetidos.
+ *
+ * Parámetros: tipo, empresa, detalleBancos, registrosConError, dia ('YYYY-MM-DD'),
+ * filasPorBanco y ctx.
+ * @returns la corrida creada (incluye secuencia_guayaquil si hubo Guayaquil)
+ */
+export async function registrarCorridaFinal({
+  tipo,
+  empresa,
+  detalleBancos,
+  registrosConError = 0,
+  dia,
+  filasPorBanco,
+  ctx,
+}) {
+  const { data, error } = await supabase.rpc('registrar_corrida', {
+    p_tipo: tipo,
+    p_empresa: empresa,
+    p_detalle: detalleBancos,
+    p_errores: registrosConError,
+    p_dia: dia,
+    p_filas: filasPorBanco,
+    p_ctx: ctx,
+  });
 
   if (error) throw error;
+  const corrida = Array.isArray(data) ? data[0] : data;
+  if (!corrida || !corrida.id) throw new Error('El servidor no devolvió la corrida registrada.');
+  return corrida;
 }
 
 export async function getArchivosCorrida(corridaId) {
@@ -109,45 +130,26 @@ export async function getArchivosCorrida(corridaId) {
 }
 
 /**
- * Anula una corrida — solo funciona si quien llama es Admin (lo hace
- * cumplir la política de la tabla, no este código). Requiere una nota
- * explicando por qué, para que quede registro.
- */
-export async function anularCorrida(corridaId, nota) {
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
-  if (!user) throw new Error('No hay sesión activa');
-  if (!nota || !nota.trim()) throw new Error('Escribe una nota explicando por qué se anula.');
-
-  const { error } = await supabase
-    .from('corrida_anulaciones')
-    .insert({ corrida_id: corridaId, anulado_por: user.id, nota: nota.trim() });
-
-  if (error) throw error;
-}
-
-/**
- * Marca que los archivos de un banco específico de esta corrida ya se
- * subieron al portal de cash management de ese banco. Solo debería poder
- * llamarlo un Admin (lo hace cumplir la política de la tabla sobre
- * `corridas`, igual que las demás operaciones de este archivo).
- *
- * @param {string} corridaId
- * @param {'produbanco'|'pichincha'|'guayaquil'} banco
- * @param {string} nombreQuienConfirma - nombre a mostrar (ej. perfil.nombre del Admin que confirma)
+ * Marca que los archivos de un banco de esta corrida ya se subieron al portal
+ * de cash management. Solo Admin (lo hace cumplir la política de la tabla).
+ * Verifica que de verdad se actualizó una fila: si la política bloquea el
+ * UPDATE, Supabase NO da error, solo devuelve 0 filas.
  */
 export async function marcarSubidoBanco(corridaId, banco, nombreQuienConfirma) {
   const cols = COLUMNAS_SUBIDO[banco];
   if (!cols) throw new Error(`Banco "${banco}" no reconocido.`);
 
-  const { error } = await supabase
+  const { data, error } = await supabase
     .from('corridas')
     .update({
       [cols.at]: new Date().toISOString(),
       [cols.por]: nombreQuienConfirma,
     })
-    .eq('id', corridaId);
+    .eq('id', corridaId)
+    .select('id');
 
   if (error) throw error;
+  if (!data || data.length === 0) {
+    throw new Error('No se pudo guardar la confirmación (sin permiso o la corrida ya no existe).');
+  }
 }

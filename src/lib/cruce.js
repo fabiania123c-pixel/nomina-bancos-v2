@@ -73,6 +73,9 @@ export function cruzarConDataMadre(filasPago, mapaDataMadre) {
       cuenta: m.cuenta,
       tipoCuenta,
       monto: String(fp.monto),
+      // Solo se usa en el export de detalle (finiquitos) — no afecta el
+      // formato de ningún archivo de banco.
+      baja: fp.baja || null,
     };
 
     const erroresValidacion = validateRow(bancoClave, rowResuelta);
@@ -92,9 +95,22 @@ export function cruzarConDataMadre(filasPago, mapaDataMadre) {
       advertencias.push({ fila, cedula: fp.cedula, nombre: m.nombre, motivo: 'Sin celular cargado en Data_madre (no bloquea este banco, pero revisa para el futuro)' });
     }
     if (bancoClave === 'guayaquil') {
+      // Guayaquil exige la cuenta en 8 dígitos exactos. Si en Data_madre viene con ceros de más,
+      // se limpia DE VERDAD (antes solo se avisaba y la línea salía más larga, corriendo todas
+      // las columnas siguientes). Si aun sin ceros no cabe en 8, es un error: no se puede generar.
       const cuentaCruda = onlyDigits(m.cuenta);
       const cuentaLimpia = cuentaCruda.replace(/^0+/, '') || '0';
-      if (cuentaCruda.length > 8 && cuentaLimpia.length <= 8) {
+      if (cuentaLimpia.length > 8) {
+        errores.push({
+          fila,
+          cedula: fp.cedula,
+          nombre: m.nombre,
+          motivo: `Cuenta de Guayaquil con más de 8 dígitos (${cuentaCruda}) — el banco exige 8, revisa Data_madre`,
+        });
+        return;
+      }
+      if (cuentaCruda.length > 8) {
+        rowResuelta.cuenta = cuentaLimpia.padStart(8, '0');
         advertencias.push({
           fila,
           cedula: fp.cedula,
@@ -102,6 +118,14 @@ export function cruzarConDataMadre(filasPago, mapaDataMadre) {
           motivo: `Cuenta en Data_madre tenía ceros de más (${cuentaCruda}) — se limpió automáticamente a ${cuentaLimpia.padStart(8, '0')}`,
         });
       }
+    }
+    if (bancoClave === 'pichincha' && onlyDigits(m.cuenta).length > 10) {
+      advertencias.push({
+        fila,
+        cedula: fp.cedula,
+        nombre: m.nombre,
+        motivo: `Cuenta de Pichincha con más de 10 dígitos (${onlyDigits(m.cuenta)}) — la línea saldría más larga que las demás, confirma que sea correcta`,
+      });
     }
 
     resultado[bancoClave].push(rowResuelta);

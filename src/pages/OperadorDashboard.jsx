@@ -106,8 +106,8 @@ export default function OperadorDashboard({ perfil, onLogout }) {
       setErrorGeneral('No tienes ninguna empresa asignada para procesar — avísale a Fabián.');
       return;
     }
-    if (!cuentaOrigen || !ruc) {
-      setErrorGeneral(`${EMPRESAS[empresa].label} todavía no tiene cuenta origen / RUC configurados en el sistema — avísale a Fabián antes de continuar.`);
+    if (!ruc) {
+      setErrorGeneral(`${EMPRESAS[empresa].label} todavía no tiene RUC configurado en el sistema — avísale a Fabián antes de continuar.`);
       return;
     }
     if (!dataMadreFile || !pagoFile) {
@@ -122,7 +122,14 @@ export default function OperadorDashboard({ perfil, onLogout }) {
       ]);
       const mapaDataMadre = parseDataMadre(dataMadreBuf);
       const filasPago = parseArchivoPago(pagoBuf);
-      const cruce = cruzarConDataMadre(filasPago, mapaDataMadre);
+      const cruce = cruzarConDataMadre(filasPago, mapaDataMadre, {
+        sociedad: EMPRESAS[empresa].sociedad,
+        tipo,
+      });
+      if (!cuentaOrigen && cruce.resultado.produbanco.length > 0) {
+        setErrorGeneral(`${EMPRESAS[empresa].label} todavía no tiene cuenta de origen configurada y hay pagos por Produbanco (la lleva cada línea del archivo) — avísale a Fabián antes de continuar.`);
+        return;
+      }
       setResultado(cruce);
     } catch (err) {
       console.error(err);
@@ -236,7 +243,7 @@ export default function OperadorDashboard({ perfil, onLogout }) {
       {vista === 'generar' && (
         <>
           <h1 style={pageTitle}>Generar archivos de pago</h1>
-          <p style={pageSubtitle}>Sube Data_madre y el archivo de pago — el cruce y el formato de cada banco se arman solos.</p>
+          <p style={pageSubtitle}>Sube la matriz de bancos y el archivo de netos — el cruce y el formato de cada banco se arman solos.</p>
 
           <Section num="1" title="Datos de la corrida">
             <div style={{ display: 'flex', gap: 14, flexWrap: 'wrap' }}>
@@ -280,7 +287,7 @@ export default function OperadorDashboard({ perfil, onLogout }) {
           <Section num="2" title="Subir archivos">
             <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap' }}>
               <Dropzone
-                label="Data_madre"
+                label="Matriz de bancos"
                 hint=".xlsx / .xlsm"
                 fileName={dataMadreFile?.name}
                 onChange={(f) => setDataMadreFile(f)}
@@ -307,7 +314,7 @@ export default function OperadorDashboard({ perfil, onLogout }) {
             <Panel tono="err" titulo={`${resultado.errores.length} fila(s) con error — corrige el archivo y vuelve a procesar`}>
               {resultado.errores.slice(0, 20).map((e, i) => (
                 <div key={i} style={panelLine}>
-                  <span className="mono" style={{ color: 'var(--muted)' }}>Fila {e.fila}</span> — {e.nombre || 'sin nombre'}, cédula <span className="mono">{e.cedula}</span>: {e.motivo}
+                  <span className="mono" style={{ color: 'var(--muted)' }}>Fila {e.fila}</span> — {e.nombre || 'sin nombre'}, Nº pers. <span className="mono">{e.nPers}</span>: {e.motivo}
                 </div>
               ))}
               {resultado.errores.length > 20 && <div style={panelLine}>… y {resultado.errores.length - 20} más.</div>}
@@ -321,7 +328,7 @@ export default function OperadorDashboard({ perfil, onLogout }) {
               ))}
               {resultado?.advertencias?.slice(0, 20).map((a, i) => (
                 <div key={i} style={panelLine}>
-                  <span className="mono" style={{ color: 'var(--muted)' }}>Fila {a.fila}</span> — {a.nombre || 'sin nombre'}, cédula <span className="mono">{a.cedula}</span>: {a.motivo}
+                  <span className="mono" style={{ color: 'var(--muted)' }}>Fila {a.fila}</span> — {a.nombre || 'sin nombre'}, Nº pers. <span className="mono">{a.nPers}</span>: {a.motivo}
                 </div>
               ))}
               {resultado?.advertencias?.length > 20 && <div style={panelLine}>… y {resultado.advertencias.length - 20} más.</div>}

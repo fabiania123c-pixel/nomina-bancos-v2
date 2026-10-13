@@ -1,4 +1,6 @@
 import { validateRow, onlyDigits } from './bankProfiles.js';
+import { EMPRESAS } from './empresas.js';
+import { SOCIEDADES } from './excelParser.js';
 
 const BANCO_A_CLAVE = {
   PRODUBANCO: 'produbanco',
@@ -12,134 +14,205 @@ const TIPO_CUENTA_POR_BANCO = {
   guayaquil: { '01': 'C00', '02': 'A00' },
 };
 
-export function cruzarConDataMadre(filasPago, mapaDataMadre) {
+const LABEL_SOCIEDAD = Object.fromEntries(
+  Object.values(EMPRESAS).map((e) => [e.sociedad, e.label])
+);
+
+/**
+ * Cruza el archivo de netos (Nº pers. + valor) con la matriz de bancos.
+ *
+ * @param filasPago  salida de parseArchivoPago
+ * @param mapa       salida de parseDataMadre (clave "SOC|NPERS" → filas)
+ * @param opts       { sociedad: 'E100'|'E101'|'E200', tipo }  — la sociedad sale de la
+ *                   empresa elegida para la corrida; solo se usan filas de esa sociedad.
+ */
+export function cruzarConDataMadre(filasPago, mapa, opts = {}) {
+  const { sociedad, tipo } = opts;
+  if (!sociedad) throw new Error('Falta la sociedad de la empresa elegida para cruzar con la matriz.');
+  const labelEmpresa = LABEL_SOCIEDAD[sociedad] || sociedad;
+
   const resultado = { produbanco: [], pichincha: [], guayaquil: [] };
   const errores = [];
   const advertencias = [];
   const vistos = new Set();
   const resueltas = [];
 
-  filasPago.forEach((fp, i) => {
-    const fila = i + 1;
+  // Índice por cédula (solo la sociedad elegida) para ids de 10 dígitos.
+  const porCedula = new Map();
+  for (const [key, filas] of mapa) {
+    if (!key.startsWith(`${sociedad}|`)) continue;
+    for (const f of filas) {
+      if (!f.cedula) continue;
+      if (!porCedula.has(f.cedula)) porCedula.set(f.cedula, new Map());
+      porCedula.get(f.cedula).set(f.nPers, filas);
+    }
+  }
 
-    if (vistos.has(fp.cedula)) {
-      errores.push({ fila, cedula: fp.cedula, nombre: fp.nombre, motivo: 'Cédula duplicada en el archivo subido' });
+  function candidatos(id) {
+    if (id.length === 10) {
+      const porPers = porCedula.get(id);
+      if (!porPers) return { filas: null };
+      if (porPers.size === 1) return { filas: [...porPers.values()][0] };
+      // Misma cédula con varios Nº pers. (recontratación): se prefiere el que no tiene cese.
+      const vigentes = [...porPers.values()].filter((fs) => !fs.every((f) => f.cese));
+      if (vigentes.length === 1) return { filas: vigentes[0] };
+      return { ambiguo: [...porPers.keys()].join(', ') };
+    }
+    const filas = mapa.get(`${sociedad}|${id}`) || mapa.get(`${sociedad}|${id.replace(/^0+/, '')}`);
+    return { filas: filas || null };
+  }
+
+  function enOtraSociedad(id) {
+    if (id.length === 10) return null;
+    for (const s of SOCIEDADES) {
+      if (s !== sociedad && mapa.has(`${s}|${id}`)) return LABEL_SOCIEDAD[s] || s;
+    }
+    return null;
+  }
+
+  filasPago.forEach((fp) => {
+    const fila = fp.fila;
+    const base = { fila, nPers: fp.id, cedula: '', nombre: '' };
+
+    if (fp.error) {
+      errores.push({ ...base, motivo: fp.error });
       return;
     }
-    vistos.add(fp.cedula);
 
-    const m = mapaDataMadre.get(fp.cedula);
-    if (!m) {
-      errores.push({ fila, cedula: fp.cedula, nombre: fp.nombre, motivo: 'Cédula no encontrada en Data_madre' });
+    const { filas: cands, ambiguo } = candidatos(fp.id);
+    if (ambiguo) {
+      errores.push({ ...base, motivo: `La cédula ${fp.id} tiene varios Nº pers. en ${labelEmpresa} (${ambiguo}) — usa el Nº pers. en el archivo` });
       return;
     }
-    if (!m.banco || !m.cuenta) {
+    if (!cands) {
+      const otra = enOtraSociedad(fp.id);
       errores.push({
-        fila,
-        cedula: fp.cedula,
-        nombre: m.nombre || fp.nombre,
-        motivo: 'Empleado en Data_madre sin banco/cuenta cargado',
+        ...base,
+        motivo: otra
+          ? `El Nº pers. ${fp.id} pertenece a ${otra}, no a ${labelEmpresa} — revisa la empresa elegida`
+          : `Nº pers. ${fp.id} no encontrado en la matriz de ${labelEmpresa}`,
       });
       return;
     }
+
+    const ref = cands[0];
+    const conBanco = cands.filter((f) => f.banco && f.cuenta);
+    if (conBanco.length === 0) {
+      errores.push({
+        ...base,
+        cedula: ref.cedula,
+        nombre: ref.nombre,
+        motivo: 'Empleado en la matriz sin banco/cuenta cargado',
+      });
+      return;
+    }
+    const distintas = new Map(conBanco.map((f) => [`${f.banco}|${onlyDigits(f.cuenta)}`, f]));
+    if (distintas.size > 1) {
+      errores.push({
+        ...base,
+        cedula: ref.cedula,
+        nombre: ref.nombre,
+        motivo: `Tiene ${distintas.size} cuentas distintas en la matriz (${[...distintas.keys()].map((k) => k.replace('|', ' ')).join(' / ')}) — define cuál es la vigente`,
+      });
+      return;
+    }
+    const m = conBanco[0];
+    const b = { ...base, cedula: m.cedula, nombre: m.nombre };
+
+    if (vistos.has(m.nPers)) {
+      errores.push({ ...b, motivo: 'Nº pers. duplicado en el archivo de netos' });
+      return;
+    }
+    vistos.add(m.nPers);
 
     const bancoClave = BANCO_A_CLAVE[m.banco];
     if (!bancoClave) {
-      errores.push({
-        fila,
-        cedula: fp.cedula,
-        nombre: m.nombre,
-        motivo: `Banco "${m.banco}" no reconocido (todavía no construido en el sistema)`,
-      });
+      errores.push({ ...b, motivo: `Banco "${m.banco}" no reconocido (todavía no construido en el sistema)` });
       return;
     }
 
     const tipoCuenta = TIPO_CUENTA_POR_BANCO[bancoClave][m.tipoCuentaCodigo];
     if (!tipoCuenta) {
-      errores.push({
-        fila,
-        cedula: fp.cedula,
-        nombre: m.nombre,
-        motivo: `Tipo de cuenta "${m.tipoCuentaCodigo}" no reconocido en Data_madre (se esperaba 01 o 02)`,
-      });
+      errores.push({ ...b, motivo: `Tipo de cuenta "${m.tipoCuentaCodigo}" no reconocido en la matriz (se esperaba 01 o 02)` });
       return;
     }
 
     const rowResuelta = {
       cedula: m.cedula,
       nombre: m.nombre,
-      codigoEmpleado: m.codigoSap,
+      codigoEmpleado: m.nPers,
       celular: m.celular,
       cuenta: m.cuenta,
       tipoCuenta,
       monto: String(fp.monto),
-      // Solo se usa en el export de detalle (finiquitos) — no afecta el
-      // formato de ningún archivo de banco.
-      baja: fp.baja || null,
+      // Solo se usa en el detalle de finiquitos (fecha de cese de la matriz);
+      // no afecta el formato de ningún archivo de banco.
+      baja: m.cese || null,
     };
 
     const erroresValidacion = validateRow(bancoClave, rowResuelta);
     if (erroresValidacion.length > 0) {
-      errores.push({ fila, cedula: fp.cedula, nombre: m.nombre, motivo: erroresValidacion.join('; ') });
+      errores.push({ ...b, motivo: erroresValidacion.join('; ') });
       return;
     }
 
     const monto = parseFloat(fp.monto) || 0;
     if (monto > 10000) {
-      advertencias.push({ fila, cedula: fp.cedula, nombre: m.nombre, motivo: `Monto inusualmente alto ($${monto.toFixed(2)}) — confirma que esté bien` });
+      advertencias.push({ ...b, motivo: `Monto inusualmente alto ($${monto.toFixed(2)}) — confirma que esté bien` });
     }
     if (monto > 0 && monto < 1) {
-      advertencias.push({ fila, cedula: fp.cedula, nombre: m.nombre, motivo: `Monto muy bajo ($${monto.toFixed(2)}) — confirma que esté completo` });
+      advertencias.push({ ...b, motivo: `Monto muy bajo ($${monto.toFixed(2)}) — confirma que esté completo` });
+    }
+    if (m.cese && tipo !== 'finiquito') {
+      const f = m.cese;
+      const txt = `${String(f.getDate()).padStart(2, '0')}/${String(f.getMonth() + 1).padStart(2, '0')}/${f.getFullYear()}`;
+      advertencias.push({ ...b, motivo: `Tiene fecha de cese en la matriz (${txt}) — confirma que deba recibir este pago` });
     }
     if (!m.celular) {
-      advertencias.push({ fila, cedula: fp.cedula, nombre: m.nombre, motivo: 'Sin celular cargado en Data_madre (no bloquea este banco, pero revisa para el futuro)' });
+      advertencias.push({ ...b, motivo: 'Sin celular cargado en la matriz (no bloquea este banco, pero revisa para el futuro)' });
     }
     if (bancoClave === 'guayaquil') {
-      // Guayaquil exige la cuenta en 8 dígitos exactos. Si en Data_madre viene con ceros de más,
-      // se limpia DE VERDAD (antes solo se avisaba y la línea salía más larga, corriendo todas
-      // las columnas siguientes). Si aun sin ceros no cabe en 8, es un error: no se puede generar.
+      // Guayaquil exige la cuenta en 8 dígitos exactos. Si viene con ceros de más se limpia
+      // DE VERDAD; si aun sin ceros no cabe en 8, es error (no se puede generar).
       const cuentaCruda = onlyDigits(m.cuenta);
       const cuentaLimpia = cuentaCruda.replace(/^0+/, '') || '0';
       if (cuentaLimpia.length > 8) {
-        errores.push({
-          fila,
-          cedula: fp.cedula,
-          nombre: m.nombre,
-          motivo: `Cuenta de Guayaquil con más de 8 dígitos (${cuentaCruda}) — el banco exige 8, revisa Data_madre`,
-        });
+        errores.push({ ...b, motivo: `Cuenta de Guayaquil con más de 8 dígitos (${cuentaCruda}) — el banco exige 8, revisa la matriz` });
         return;
       }
       if (cuentaCruda.length > 8) {
         rowResuelta.cuenta = cuentaLimpia.padStart(8, '0');
         advertencias.push({
-          fila,
-          cedula: fp.cedula,
-          nombre: m.nombre,
-          motivo: `Cuenta en Data_madre tenía ceros de más (${cuentaCruda}) — se limpió automáticamente a ${cuentaLimpia.padStart(8, '0')}`,
+          ...b,
+          motivo: `Cuenta tenía ceros de más (${cuentaCruda}) — se limpió automáticamente a ${cuentaLimpia.padStart(8, '0')}`,
         });
       }
     }
     if (bancoClave === 'pichincha' && onlyDigits(m.cuenta).length > 10) {
       advertencias.push({
-        fila,
-        cedula: fp.cedula,
-        nombre: m.nombre,
+        ...b,
         motivo: `Cuenta de Pichincha con más de 10 dígitos (${onlyDigits(m.cuenta)}) — la línea saldría más larga que las demás, confirma que sea correcta`,
+      });
+    }
+    if (bancoClave === 'produbanco' && onlyDigits(m.cuenta).length !== 11) {
+      advertencias.push({
+        ...b,
+        motivo: `Cuenta de Produbanco con ${onlyDigits(m.cuenta).length} dígitos (${onlyDigits(m.cuenta)}); las demás tienen 11 — confirma que sea correcta`,
       });
     }
 
     resultado[bancoClave].push(rowResuelta);
-    resueltas.push({ fila, cedula: fp.cedula, nombre: m.nombre, cuenta: m.cuenta });
+    resueltas.push({ ...b, cuenta: rowResuelta.cuenta, cedulaKey: m.cedula });
   });
 
   const porCuenta = new Map();
   resueltas.forEach((r) => {
     if (!porCuenta.has(r.cuenta)) porCuenta.set(r.cuenta, new Set());
-    porCuenta.get(r.cuenta).add(r.cedula);
+    porCuenta.get(r.cuenta).add(r.cedulaKey);
   });
   resueltas.forEach((r) => {
     if (porCuenta.get(r.cuenta).size > 1) {
-      advertencias.push({ fila: r.fila, cedula: r.cedula, nombre: r.nombre, motivo: 'Esta cuenta se repite en otra cédula del archivo' });
+      advertencias.push({ fila: r.fila, nPers: r.nPers, cedula: r.cedula, nombre: r.nombre, motivo: 'Esta cuenta se repite en otra persona del archivo' });
     }
   });
 

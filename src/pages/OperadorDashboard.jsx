@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
 import AppShell from '../components/AppShell.jsx';
 import { parseDataMadre, parseArchivoPago } from '../lib/excelParser.js';
-import { cruzarConDataMadre } from '../lib/cruce.js';
+import { cruzarVariasEmpresas } from '../lib/cruce.js';
 import { buildFileContent } from '../lib/bankProfiles.js';
 import { registrarCorridaFinal, getHistorialCorridas, getMisEmpresas } from '../lib/historial.js';
 import { EMPRESAS, EMPRESAS_KEYS } from '../lib/empresas.js';
@@ -34,6 +34,9 @@ const LABEL_ARCHIVO_PAGO = {
   teletrabajo: 'Archivo de teletrabajo',
 };
 
+const AMBAS = 'ambas'; // opción del selector: Equinox + Medeport en una sola corrida
+const EMPRESAS_AMBAS = ['equinox', 'medeport'];
+
 export default function OperadorDashboard({ perfil, onLogout }) {
   const hoy = new Date();
   const mm = String(hoy.getMonth() + 1).padStart(2, '0');
@@ -45,21 +48,22 @@ export default function OperadorDashboard({ perfil, onLogout }) {
   const [tipo, setTipo] = useState('finiquito');
   // Empresas que este usuario puede procesar (null = cargando). Las asigna el Admin en la base.
   const [misEmpresas, setMisEmpresas] = useState(null);
+  // Valor del selector: una clave de EMPRESAS, o 'ambas' (Equinox + Medeport juntas).
   const [empresa, setEmpresa] = useState('');
-  const cuentaOrigen = EMPRESAS[empresa]?.cuentaOrigen || '';
-  const ruc = EMPRESAS[empresa]?.ruc || '';
+  const puedeAmbas = !!misEmpresas && EMPRESAS_AMBAS.every((k) => misEmpresas.includes(k));
+  const objetivo = empresa === AMBAS ? EMPRESAS_AMBAS : empresa ? [empresa] : [];
 
   const [dataMadreFile, setDataMadreFile] = useState(null);
   const [pagoFile, setPagoFile] = useState(null);
 
   const [procesando, setProcesando] = useState(false);
   const [errorGeneral, setErrorGeneral] = useState('');
+  // { bloques: [{empresa, resultado, ...}], errores, advertencias, otrasEmpresas }
   const [resultado, setResultado] = useState(null);
 
   const [finalizando, setFinalizando] = useState(false);
-  const [finalizado, setFinalizado] = useState(false);
-  // Contexto definitivo (fecha, empresa, consecutivo de Guayaquil) — existe SOLO después de finalizar.
-  const [finalCtx, setFinalCtx] = useState(null);
+  // Contexto definitivo por empresa (fecha, consecutivo de Guayaquil) — existe SOLO después de finalizar.
+  const [finales, setFinales] = useState({});
 
   const [historial, setHistorial] = useState([]);
   const [previaAbierta, setPreviaAbierta] = useState({});
@@ -69,7 +73,8 @@ export default function OperadorDashboard({ perfil, onLogout }) {
     getMisEmpresas().then((lista) => {
       const validas = lista.filter((k) => EMPRESAS_KEYS.includes(k));
       setMisEmpresas(validas);
-      setEmpresa((actual) => actual || validas[0] || '');
+      const ambas = EMPRESAS_AMBAS.every((k) => validas.includes(k)) && !validas.includes('superdeporte');
+      setEmpresa((actual) => actual || (ambas ? AMBAS : validas[0] || ''));
     });
   }, []);
 
@@ -81,8 +86,7 @@ export default function OperadorDashboard({ perfil, onLogout }) {
   // Cambiar empresa o tipo invalida lo ya procesado: hay que volver a procesar.
   function limpiarResultado() {
     setResultado(null);
-    setFinalizado(false);
-    setFinalCtx(null);
+    setFinales({});
     setPreviaAbierta({});
     setErrorGeneral('');
   }
@@ -100,14 +104,15 @@ export default function OperadorDashboard({ perfil, onLogout }) {
   async function procesar() {
     setErrorGeneral('');
     setResultado(null);
-    setFinalizado(false);
-    setFinalCtx(null);
-    if (!empresa || !misEmpresas?.includes(empresa)) {
+    setFinales({});
+    setPreviaAbierta({});
+    if (objetivo.length === 0 || !objetivo.every((k) => misEmpresas?.includes(k))) {
       setErrorGeneral('No tienes ninguna empresa asignada para procesar — avísale a Fabián.');
       return;
     }
-    if (!ruc) {
-      setErrorGeneral(`${EMPRESAS[empresa].label} todavía no tiene RUC configurado en el sistema — avísale a Fabián antes de continuar.`);
+    const sinRuc = objetivo.find((k) => !EMPRESAS[k].ruc);
+    if (sinRuc) {
+      setErrorGeneral(`${EMPRESAS[sinRuc].label} todavía no tiene RUC configurado en el sistema — avísale a Fabián antes de continuar.`);
       return;
     }
     if (!dataMadreFile || !pagoFile) {
@@ -122,18 +127,19 @@ export default function OperadorDashboard({ perfil, onLogout }) {
       ]);
       const mapaDataMadre = parseDataMadre(dataMadreBuf);
       const filasPago = parseArchivoPago(pagoBuf);
-      const cruce = cruzarConDataMadre(filasPago, mapaDataMadre, {
-        sociedad: EMPRESAS[empresa].sociedad,
-        tipo,
-      });
-      const enEstaEmpresa = Object.values(cruce.resultado).reduce((a, f) => a + f.length, 0);
-      if (enEstaEmpresa === 0 && cruce.errores.length === 0 && cruce.otrasEmpresas.length > 0) {
+      const cruce = cruzarVariasEmpresas(filasPago, mapaDataMadre, { empresas: objetivo, tipo });
+      const enObjetivo = cruce.bloques.reduce(
+        (a, b) => a + Object.values(b.resultado).reduce((x, f) => x + f.length, 0), 0
+      );
+      if (enObjetivo === 0 && cruce.errores.length === 0 && cruce.otrasEmpresas.length > 0) {
         const otras = [...new Set(cruce.otrasEmpresas.map((o) => o.empresa))].join(' y ');
-        setErrorGeneral(`Ninguna persona de este archivo es de ${EMPRESAS[empresa].label}: todas son de ${otras}. Cambia la empresa y vuelve a procesar.`);
+        const propias = objetivo.map((k) => EMPRESAS[k].label).join(' / ');
+        setErrorGeneral(`Ninguna persona de este archivo es de ${propias}: todas son de ${otras}. Cambia la empresa y vuelve a procesar.`);
         return;
       }
-      if (!cuentaOrigen && cruce.resultado.produbanco.length > 0) {
-        setErrorGeneral(`${EMPRESAS[empresa].label} todavía no tiene cuenta de origen configurada y hay pagos por Produbanco (la lleva cada línea del archivo) — avísale a Fabián antes de continuar.`);
+      const sinCuenta = cruce.bloques.find((b) => !EMPRESAS[b.empresa].cuentaOrigen && b.resultado.produbanco.length > 0);
+      if (sinCuenta) {
+        setErrorGeneral(`${EMPRESAS[sinCuenta.empresa].label} todavía no tiene cuenta de origen configurada y hay pagos por Produbanco (la lleva cada línea del archivo) — avísale a Fabián antes de continuar.`);
         return;
       }
       setResultado(cruce);
@@ -145,16 +151,32 @@ export default function OperadorDashboard({ perfil, onLogout }) {
     }
   }
 
-  function ctxBase() {
-    return { cuentaOrigen, ruc, mm, dd, yyyy };
+  function ctxBase(emp) {
+    return { cuentaOrigen: EMPRESAS[emp]?.cuentaOrigen || '', ruc: EMPRESAS[emp]?.ruc || '', mm, dd, yyyy };
   }
 
-  // Las descargas solo existen después de finalizar: usan finalCtx (con el consecutivo real).
-  function descargarBanco(bancoKey) {
-    if (!finalCtx) return;
-    const filas = resultado.resultado[bancoKey];
-    const content = buildFileContent(bancoKey, filas, finalCtx);
-    const filename = nombreArchivoBanco(bancoKey, finalCtx);
+  function detalleBancos(bloque) {
+    const detalle = {};
+    for (const banco of ['produbanco', 'pichincha', 'guayaquil']) {
+      const filas = bloque.resultado[banco];
+      if (filas.length === 0) continue;
+      const total = filas.reduce((acc, r) => acc + (parseFloat(r.monto) || 0), 0);
+      detalle[banco] = { registros: filas.length, total };
+    }
+    return detalle;
+  }
+
+  const bloquesConDatos = resultado
+    ? resultado.bloques.filter((b) => Object.values(b.resultado).some((f) => f.length > 0))
+    : [];
+  const variasEmpresas = objetivo.length > 1;
+
+  // Las descargas solo existen después de finalizar: usan finales[empresa] (con el consecutivo real).
+  function descargarBanco(bloque, bancoKey) {
+    const fctx = finales[bloque.empresa];
+    if (!fctx) return;
+    const content = buildFileContent(bancoKey, bloque.resultado[bancoKey], fctx);
+    const filename = nombreArchivoBanco(bancoKey, fctx);
     const blob = new Blob([content], { type: 'text/plain;charset=utf-8' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
@@ -166,38 +188,29 @@ export default function OperadorDashboard({ perfil, onLogout }) {
     URL.revokeObjectURL(url);
   }
 
-  function detalleBancos() {
-    const detalle = {};
-    for (const banco of ['produbanco', 'pichincha', 'guayaquil']) {
-      const filas = resultado.resultado[banco];
-      if (filas.length === 0) continue;
-      const total = filas.reduce((acc, r) => acc + (parseFloat(r.monto) || 0), 0);
-      detalle[banco] = { registros: filas.length, total };
-    }
-    return detalle;
-  }
-
-  function descargarPdf() {
-    if (!finalCtx) return;
-    const { dd: d, mm: m, yyyy: y } = finalCtx;
+  function descargarPdf(bloque) {
+    const fctx = finales[bloque.empresa];
+    if (!fctx) return;
+    const { dd: d, mm: m, yyyy: y } = fctx;
     descargarPdfResumen({
       tipo,
-      empresa: EMPRESAS[finalCtx.empresa]?.label,
+      empresa: EMPRESAS[bloque.empresa]?.label,
       periodo: `MES-${m}-${y}`,
       fecha: `${d}/${m}/${y}`,
       generadoPor: perfil.nombre,
-      detalleBancos: detalleBancos(),
-      filename: nombrePdfResumen({ empresa: finalCtx.empresa, dd: d, mm: m, yyyy: y }),
+      detalleBancos: detalleBancos(bloque),
+      filename: nombrePdfResumen({ empresa: bloque.empresa, dd: d, mm: m, yyyy: y }),
     });
   }
 
-  async function descargarDetalle() {
-    if (!finalCtx) return;
+  async function descargarDetalle(bloque) {
+    const fctx = finales[bloque.empresa];
+    if (!fctx) return;
     try {
       await descargarDetalleExcel({
-        resultado: resultado.resultado,
+        resultado: bloque.resultado,
         tipo,
-        filename: `detalle-nomina-${EMPRESAS[finalCtx.empresa]?.abrev || 'Super'}-${finalCtx.dd}${finalCtx.mm}${finalCtx.yyyy}.xlsx`,
+        filename: `detalle-nomina-${EMPRESAS[bloque.empresa]?.abrev || 'Super'}-${fctx.dd}${fctx.mm}${fctx.yyyy}.xlsx`,
       });
     } catch (err) {
       console.error(err);
@@ -205,44 +218,58 @@ export default function OperadorDashboard({ perfil, onLogout }) {
     }
   }
 
-  // Finalizar = guardar en el servidor (de forma atómica) y recién ahí habilitar las descargas.
+  // Finalizar = guardar en el servidor (de forma atómica por empresa) y recién ahí habilitar las descargas.
+  // Si hay dos empresas se registran una tras otra; si la segunda falla, la primera queda registrada y
+  // el botón vuelve a ofrecer solo lo pendiente (no se duplica nada).
   async function handleFinalizar() {
     setFinalizando(true);
     setErrorGeneral('');
+    let ultimo = null;
     try {
-      // La fecha se toma AHORA (no al abrir la pantalla) para que cuadre con el consecutivo del día.
-      const ahora = new Date();
-      const y = String(ahora.getFullYear());
-      const m = String(ahora.getMonth() + 1).padStart(2, '0');
-      const d = String(ahora.getDate()).padStart(2, '0');
-      const ctx = { cuentaOrigen, ruc, mm: m, dd: d, yyyy: y };
+      for (const bloque of bloquesConDatos) {
+        if (finales[bloque.empresa]) continue;
+        ultimo = bloque;
+        // La fecha se toma AHORA (no al abrir la pantalla) para que cuadre con el consecutivo del día.
+        const ahora = new Date();
+        const y = String(ahora.getFullYear());
+        const m = String(ahora.getMonth() + 1).padStart(2, '0');
+        const d = String(ahora.getDate()).padStart(2, '0');
+        const ctx = { cuentaOrigen: EMPRESAS[bloque.empresa].cuentaOrigen, ruc: EMPRESAS[bloque.empresa].ruc, mm: m, dd: d, yyyy: y };
 
-      const corrida = await registrarCorridaFinal({
-        tipo,
-        empresa,
-        detalleBancos: detalleBancos(),
-        registrosConError: resultado.errores.length,
-        dia: `${y}-${m}-${d}`,
-        filasPorBanco: resultado.resultado,
-        ctx,
-      });
-      setFinalCtx({ ...ctx, empresa, secuencia: corrida.secuencia_guayaquil ?? null });
-      setFinalizado(true);
+        const corrida = await registrarCorridaFinal({
+          tipo,
+          empresa: bloque.empresa,
+          detalleBancos: detalleBancos(bloque),
+          registrosConError: resultado.errores.length,
+          dia: `${y}-${m}-${d}`,
+          filasPorBanco: bloque.resultado,
+          ctx,
+        });
+        setFinales((prev) => ({ ...prev, [bloque.empresa]: { ...ctx, empresa: bloque.empresa, secuencia: corrida.secuencia_guayaquil ?? null } }));
+      }
       getHistorialCorridas(500).then(setHistorial);
     } catch (err) {
       console.error(err);
-      setErrorGeneral('No se pudo finalizar el proceso: ' + err.message);
+      getHistorialCorridas(500).then(setHistorial);
+      const quien = ultimo ? ` (${EMPRESAS[ultimo.empresa].label})` : '';
+      setErrorGeneral(`No se pudo finalizar el proceso${quien}: ` + err.message + (bloquesConDatos.some((b) => finales[b.empresa]) ? ' Lo que ya se registró no se repite: vuelve a presionar "Finalizar" para completar lo pendiente.' : ''));
     } finally {
       setFinalizando(false);
     }
   }
 
+  const finalizado = bloquesConDatos.length > 0 && bloquesConDatos.every((b) => finales[b.empresa]);
+  const algunoFinalizado = bloquesConDatos.some((b) => finales[b.empresa]);
   const hayErrores = resultado && resultado.errores.length > 0;
-  const hayResultados =
-    resultado && !hayErrores && Object.values(resultado.resultado).some((f) => f.length > 0);
-  const avisosHistorico = hayResultados ? compararConHistorico(detalleBancos(), historial, tipo, empresa) : [];
+  const hayResultados = resultado && !hayErrores && bloquesConDatos.length > 0;
+  const avisosHistorico = hayResultados
+    ? bloquesConDatos.flatMap((b) =>
+        compararConHistorico(detalleBancos(b), historial, tipo, b.empresa).map((t) => (variasEmpresas ? `${EMPRESAS[b.empresa].label}: ${t}` : t))
+      )
+    : [];
   const hayAdvertencias =
     (resultado && resultado.advertencias && resultado.advertencias.length > 0) || avisosHistorico.length > 0;
+  const etiquetaEmpresa = variasEmpresas ? 'Equinox + Medeport' : EMPRESAS[objetivo[0]]?.label;
 
   return (
     <AppShell perfil={perfil} onLogout={onLogout} nav={nav}>
@@ -272,6 +299,7 @@ export default function OperadorDashboard({ perfil, onLogout }) {
                   <div style={fechaAuto}>Cargando…</div>
                 ) : misEmpresas.length > 1 ? (
                   <select value={empresa} onChange={(e) => handleEmpresaChange(e.target.value)} style={input}>
+                    {puedeAmbas && <option value={AMBAS}>Equinox + Medeport (ambas)</option>}
                     {misEmpresas.map((key) => (
                       <option key={key} value={key}>{EMPRESAS[key].label}</option>
                     ))}
@@ -286,8 +314,11 @@ export default function OperadorDashboard({ perfil, onLogout }) {
                 <div className="mono" style={fechaAuto}>{dd}/{mm}/{yyyy}</div>
               </Field>
             </div>
-            {/* Cuenta origen y RUC ya no se muestran en pantalla — los fija
-                automáticamente la empresa seleccionada arriba (ver EMPRESAS). */}
+            {empresa === AMBAS && (
+              <p style={{ fontSize: 12.5, color: 'var(--muted)', marginTop: 10 }}>
+                Un solo archivo de netos con Equinox y/o Medeport: el sistema separa a cada persona en su empresa y genera los archivos de cada una.
+              </p>
+            )}
           </Section>
 
           <Section num="2" title="Subir archivos">
@@ -334,7 +365,7 @@ export default function OperadorDashboard({ perfil, onLogout }) {
               ))}
               {resultado?.advertencias?.slice(0, 20).map((a, i) => (
                 <div key={i} style={panelLine}>
-                  <span className="mono" style={{ color: 'var(--muted)' }}>Fila {a.fila}</span> — {a.nombre || 'sin nombre'}, Nº pers. <span className="mono">{a.nPers}</span>: {a.motivo}
+                  <span className="mono" style={{ color: 'var(--muted)' }}>Fila {a.fila}</span> — {variasEmpresas && a.empresa ? `[${a.empresa}] ` : ''}{a.nombre || 'sin nombre'}, Nº pers. <span className="mono">{a.nPers}</span>: {a.motivo}
                 </div>
               ))}
               {resultado?.advertencias?.length > 20 && <div style={panelLine}>… y {resultado.advertencias.length - 20} más.</div>}
@@ -342,7 +373,7 @@ export default function OperadorDashboard({ perfil, onLogout }) {
           )}
 
           {resultado?.otrasEmpresas?.length > 0 && (
-            <Panel tono="warn" titulo={`Este archivo también trae personas de otra empresa — NO entran en esta corrida de ${EMPRESAS[empresa].label}`}>
+            <Panel tono="warn" titulo={`Este archivo también trae personas de otra empresa — NO entran en esta corrida de ${etiquetaEmpresa}`}>
               {Object.entries(
                 resultado.otrasEmpresas.reduce((acc, o) => {
                   acc[o.empresa] = acc[o.empresa] || { n: 0, total: 0 };
@@ -360,69 +391,93 @@ export default function OperadorDashboard({ perfil, onLogout }) {
 
           {hayResultados && (
             <Section num="3" title="Resumen y descarga">
-              {Object.entries(detalleBancos()).map(([banco, info]) => (
-                <div key={banco}>
-                  <div style={filaBanco}>
-                    <div style={{ borderLeft: `2px solid ${COLOR_BANCO[banco]}`, paddingLeft: 10 }}>
-                      <div style={{ fontWeight: 600, fontSize: 13.5 }}>{LABEL_BANCO[banco]}</div>
-                      <div className="mono" style={{ fontSize: 12, color: 'var(--muted)' }}>
-                        {info.registros} reg. · ${info.total.toFixed(2)}
+              {bloquesConDatos.map((bloque) => {
+                const fctx = finales[bloque.empresa];
+                return (
+                  <div key={bloque.empresa} style={variasEmpresas ? { marginBottom: 22 } : undefined}>
+                    {variasEmpresas && (
+                      <div style={{ fontSize: 13, fontWeight: 700, margin: '4px 0 6px', display: 'flex', alignItems: 'center', gap: 8 }}>
+                        {EMPRESAS[bloque.empresa].label}
+                        {fctx && <span style={{ color: 'var(--ok)', fontWeight: 600, fontSize: 12 }}>✓ registrada</span>}
                       </div>
-                    </div>
-                    <div style={{ display: 'flex', gap: 8 }}>
-                      <button
-                        onClick={() => setPreviaAbierta((p) => ({ ...p, [banco]: !p[banco] }))}
-                        style={btnGhost}
-                      >
-                        {previaAbierta[banco] ? 'Ocultar vista previa' : 'Vista previa'}
-                      </button>
-                      {finalizado && finalCtx && (
-                        <button onClick={() => descargarBanco(banco)} style={btnGhost} title={nombreArchivoBanco(banco, finalCtx)}>
-                          Descargar .txt
-                        </button>
-                      )}
-                    </div>
-                  </div>
-                  {previaAbierta[banco] && (
-                    <div style={previewBox}>
-                      {buildFileContent(banco, resultado.resultado[banco], ctxBase())
-                        .split('\r\n')
-                        .slice(0, 3)
-                        .map((linea, i) => (
-                          <div key={i} className="mono" style={previewLine}>{linea || ' '}</div>
-                        ))}
-                      {resultado.resultado[banco].length > 3 && (
-                        <div style={{ fontSize: 11, color: 'var(--muted-2)', marginTop: 6 }}>
-                          … y {resultado.resultado[banco].length - 3} línea(s) más en el archivo completo.
+                    )}
+                    {Object.entries(detalleBancos(bloque)).map(([banco, info]) => {
+                      const kPrevia = `${bloque.empresa}:${banco}`;
+                      return (
+                        <div key={banco}>
+                          <div style={filaBanco}>
+                            <div style={{ borderLeft: `2px solid ${COLOR_BANCO[banco]}`, paddingLeft: 10 }}>
+                              <div style={{ fontWeight: 600, fontSize: 13.5 }}>{LABEL_BANCO[banco]}</div>
+                              <div className="mono" style={{ fontSize: 12, color: 'var(--muted)' }}>
+                                {info.registros} reg. · ${info.total.toFixed(2)}
+                              </div>
+                            </div>
+                            <div style={{ display: 'flex', gap: 8 }}>
+                              <button
+                                onClick={() => setPreviaAbierta((p) => ({ ...p, [kPrevia]: !p[kPrevia] }))}
+                                style={btnGhost}
+                              >
+                                {previaAbierta[kPrevia] ? 'Ocultar vista previa' : 'Vista previa'}
+                              </button>
+                              {fctx && (
+                                <button onClick={() => descargarBanco(bloque, banco)} style={btnGhost} title={nombreArchivoBanco(banco, fctx)}>
+                                  Descargar .txt
+                                </button>
+                              )}
+                            </div>
+                          </div>
+                          {previaAbierta[kPrevia] && (
+                            <div style={previewBox}>
+                              {buildFileContent(banco, bloque.resultado[banco], ctxBase(bloque.empresa))
+                                .split('\r\n')
+                                .slice(0, 3)
+                                .map((linea, i) => (
+                                  <div key={i} className="mono" style={previewLine}>{linea || ' '}</div>
+                                ))}
+                              {bloque.resultado[banco].length > 3 && (
+                                <div style={{ fontSize: 11, color: 'var(--muted-2)', marginTop: 6 }}>
+                                  … y {bloque.resultado[banco].length - 3} línea(s) más en el archivo completo.
+                                </div>
+                              )}
+                            </div>
+                          )}
                         </div>
-                      )}
-                    </div>
-                  )}
-                </div>
-              ))}
+                      );
+                    })}
+                    {fctx && (
+                      <div style={{ display: 'flex', gap: 10, marginTop: 12, flexWrap: 'wrap' }}>
+                        <button onClick={() => descargarPdf(bloque)} style={btnGhost}>
+                          Descargar resumen PDF{variasEmpresas ? ` · ${EMPRESAS[bloque.empresa].label}` : ''}
+                        </button>
+                        <button onClick={() => descargarDetalle(bloque)} style={btnGhost}>
+                          Descargar detalle (Excel){variasEmpresas ? ` · ${EMPRESAS[bloque.empresa].label}` : ''}
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
 
               <div style={{ display: 'flex', gap: 10, marginTop: 20, flexWrap: 'wrap' }}>
-                {finalizado && finalCtx ? (
-                  <>
-                    <button onClick={descargarPdf} style={btnGhost}>Descargar resumen PDF</button>
-                    <button onClick={descargarDetalle} style={btnGhost}>Descargar detalle (Excel)</button>
-                    <button disabled style={{ ...btnPrimary, opacity: 0.7, cursor: 'default' }}>Proceso finalizado ✓</button>
-                  </>
+                {finalizado ? (
+                  <button disabled style={{ ...btnPrimary, opacity: 0.7, cursor: 'default' }}>Proceso finalizado ✓</button>
                 ) : (
                   <button onClick={handleFinalizar} disabled={finalizando} style={btnPrimary}>
-                    {finalizando ? 'Finalizando…' : 'Finalizar proceso'}
+                    {finalizando ? 'Finalizando…' : algunoFinalizado ? 'Finalizar lo pendiente' : 'Finalizar proceso'}
                   </button>
                 )}
               </div>
               {!finalizado && (
                 <p style={{ fontSize: 12.5, color: 'var(--muted)', marginTop: 10 }}>
-                  Revisa la vista previa. Al finalizar se registra el proceso y se habilitan las descargas (.txt, PDF y Excel).
+                  Revisa la vista previa. Al finalizar se registra el proceso{variasEmpresas ? ' de cada empresa' : ''} y se habilitan las descargas (.txt, PDF y Excel).
                 </p>
               )}
-              {finalizado && (
+              {algunoFinalizado && (
                 <p style={{ fontSize: 12.5, color: 'var(--ok)', marginTop: 10 }}>
                   Registrado en el historial — el Admin ya lo puede ver.
-                  {finalCtx?.secuencia != null && ` Consecutivo Guayaquil de hoy: ${String(finalCtx.secuencia).padStart(2, '0')}.`}
+                  {bloquesConDatos.filter((b) => finales[b.empresa]?.secuencia != null).map((b) =>
+                    ` Consecutivo Guayaquil de hoy${variasEmpresas ? ` (${EMPRESAS[b.empresa].label})` : ''}: ${String(finales[b.empresa].secuencia).padStart(2, '0')}.`
+                  )}
                 </p>
               )}
             </Section>

@@ -37,6 +37,7 @@ export function cruzarConDataMadre(filasPago, mapa, opts = {}) {
   const vistos = new Set();
   const resueltas = [];
   const otrasEmpresas = [];
+  const filasResueltas = [];
 
   // Índice por cédula (solo la sociedad elegida) para ids de 10 dígitos.
   const porCedula = new Map();
@@ -97,7 +98,7 @@ export function cruzarConDataMadre(filasPago, mapa, opts = {}) {
         otrasEmpresas.push({ fila, nPers: fp.id, nombre: otra.nombre, empresa: otra.empresa, monto: fp.monto });
         return;
       }
-      errores.push({ ...base, motivo: `Nº pers. ${fp.id} no encontrado en la matriz` });
+      errores.push({ ...base, noEncontrado: true, motivo: `Nº pers. ${fp.id} no encontrado en la matriz` });
       return;
     }
 
@@ -208,6 +209,7 @@ export function cruzarConDataMadre(filasPago, mapa, opts = {}) {
     }
 
     resultado[bancoClave].push(rowResuelta);
+    filasResueltas.push(fila);
     resueltas.push({ ...b, cuenta: rowResuelta.cuenta, cedulaKey: m.cedula });
   });
 
@@ -222,5 +224,79 @@ export function cruzarConDataMadre(filasPago, mapa, opts = {}) {
     }
   });
 
-  return { resultado, errores, advertencias, otrasEmpresas };
+  return { resultado, errores, advertencias, otrasEmpresas, filasResueltas };
+}
+
+/**
+ * Procesa UN archivo de netos contra VARIAS empresas a la vez (p. ej. Equinox + Medeport).
+ * Devuelve un bloque por empresa (cada uno con su `resultado` por banco) y listas combinadas
+ * de errores / advertencias / personas de otras empresas, sin duplicados.
+ *
+ * Reglas:
+ *  - "No encontrado" solo es error si la persona no está en NINGUNA de las empresas elegidas.
+ *  - Una persona de una empresa elegida no se reporta como "otra empresa".
+ *  - Si una misma fila de netos resolvería en dos empresas (cédula o Nº pers. presente en ambas),
+ *    es error y no se paga en ninguna: sería un pago doble.
+ *
+ * @param empresas  claves de EMPRESAS, p. ej. ['equinox','medeport']
+ */
+export function cruzarVariasEmpresas(filasPago, mapa, { empresas, tipo }) {
+  const sociedades = empresas.map((k) => EMPRESAS[k].sociedad);
+  const labels = new Set(empresas.map((k) => EMPRESAS[k].label));
+
+  let cruces = sociedades.map((sociedad) => cruzarConDataMadre(filasPago, mapa, { sociedad, tipo }));
+
+  // Filas que resolverían en más de una empresa -> error, y se vuelve a cruzar sin ellas.
+  const cuenta = new Map();
+  cruces.forEach((c) => c.filasResueltas.forEach((f) => cuenta.set(f, (cuenta.get(f) || 0) + 1)));
+  const dobles = new Set([...cuenta].filter(([, n]) => n > 1).map(([f]) => f));
+  const erroresDobles = [];
+  let filasUsar = filasPago;
+  if (dobles.size > 0) {
+    filasPago.forEach((fp) => {
+      if (dobles.has(fp.fila)) {
+        erroresDobles.push({
+          fila: fp.fila, nPers: fp.id, cedula: '', nombre: '',
+          motivo: `${fp.id} existe en más de una de estas empresas (${[...labels].join(' y ')}) y se pagaría doble — usa el Nº pers. exacto en el archivo`,
+        });
+      }
+    });
+    filasUsar = filasPago.filter((fp) => !dobles.has(fp.fila));
+    cruces = sociedades.map((sociedad) => cruzarConDataMadre(filasUsar, mapa, { sociedad, tipo }));
+  }
+
+  // Errores: "no encontrado" solo si no está en ninguna; el resto se deduplica por fila+motivo.
+  const noEnc = new Map();
+  cruces.forEach((c) => c.errores.forEach((e) => { if (e.noEncontrado) noEnc.set(e.fila, (noEnc.get(e.fila) || 0) + 1); }));
+  const errores = [...erroresDobles];
+  const vistosErr = new Set();
+  cruces.forEach((c) => c.errores.forEach((e) => {
+    if (e.noEncontrado && noEnc.get(e.fila) < cruces.length) return; // lo resolvió otra empresa
+    const k = `${e.fila}|${e.motivo}`;
+    if (vistosErr.has(k)) return;
+    vistosErr.add(k);
+    errores.push(e);
+  }));
+  errores.sort((a, b) => a.fila - b.fila);
+
+  // Personas de otras empresas (no elegidas), una vez por fila.
+  const otras = [];
+  const vistasOtras = new Set();
+  cruces.forEach((c) => c.otrasEmpresas.forEach((o) => {
+    if (labels.has(o.empresa) || vistasOtras.has(o.fila)) return;
+    vistasOtras.add(o.fila);
+    otras.push(o);
+  }));
+
+  return {
+    bloques: empresas.map((empresa, i) => ({
+      empresa,
+      resultado: cruces[i].resultado,
+      advertencias: cruces[i].advertencias,
+      filasResueltas: cruces[i].filasResueltas,
+    })),
+    errores,
+    advertencias: cruces.flatMap((c, i) => c.advertencias.map((a) => ({ ...a, empresa: EMPRESAS[empresas[i]].label }))),
+    otrasEmpresas: otras,
+  };
 }

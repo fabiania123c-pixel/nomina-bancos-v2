@@ -3,8 +3,9 @@ import ExcelJS from 'exceljs';
 const LABEL_BANCO = { produbanco: 'PRODUBANCO', pichincha: 'BANCO PICHINCHA', guayaquil: 'BANCO DE GUAYAQUIL' };
 
 // Columnas en el mismo orden que el archivo de referencia (NETOS_FINIQUITOS).
-function columnasDetalle(incluirBaja) {
+function columnasDetalle(incluirBaja, conEmpresa) {
   const cols = [
+    ...(conEmpresa ? [{ header: 'EMPRESA', key: 'empresa', width: 14 }] : []),
     { header: 'COD. SAP', key: 'codigoSap', width: 11 },
     { header: 'NOMBRE', key: 'nombre', width: 34 },
     { header: 'CEDULA', key: 'cedula', width: 14 },
@@ -35,22 +36,24 @@ const BORDE_SUAVE = {
 };
 
 /**
- * Genera y descarga el Excel de detalle por empleado: un solo archivo con
- * los 3 bancos juntos (la columna BANCO los distingue), armado a partir de
- * los datos ya cruzados y validados contra Data_madre — no del archivo
- * crudo que se sube. Por eso una cuenta corregida o un banco confirmado
- * salen reflejados aquí tal como quedaron en el .txt real.
+ * Arma el libro de detalle por empleado (sin descargarlo; así se puede probar).
  *
- * @param {object} resultado - { produbanco: [...], pichincha: [...], guayaquil: [...] },
- *   tal como lo entrega cruzarConDataMadre (o lo guardado en corrida_archivos).
- * @param {string} tipo - tipo de la corrida; la columna BAJA solo se incluye para 'finiquito'.
- * @param {string} filename
+ * Un solo archivo con los 3 bancos juntos (la columna BANCO los distingue), armado a partir de
+ * los datos ya cruzados y validados contra la matriz — no del archivo crudo que se sube.
+ *
+ * Dos formas de llamarlo:
+ *  - { resultado }                       una empresa: { produbanco, pichincha, guayaquil }
+ *  - { bloques: [{ empresa, resultado }] } varias empresas en un solo Excel: agrega la columna
+ *    EMPRESA y lista primero todo lo de la primera empresa, luego la siguiente.
+ *
+ * @param {string} tipo - la columna BAJA solo se incluye para 'finiquito'.
  */
-export async function descargarDetalleExcel({ resultado, tipo, filename }) {
+export async function armarDetalleExcel({ resultado, bloques, tipo }) {
   const incluirBaja = tipo === 'finiquito';
+  const conEmpresa = Array.isArray(bloques) && bloques.length > 0;
   const wb = new ExcelJS.Workbook();
   const ws = wb.addWorksheet('Detalle');
-  ws.columns = columnasDetalle(incluirBaja);
+  ws.columns = columnasDetalle(incluirBaja, conEmpresa);
 
   // Columnas que deben quedar como texto (nunca número) para no perder
   // ceros a la izquierda: cédula, cuenta, celular y código SAP.
@@ -60,20 +63,24 @@ export async function descargarDetalleExcel({ resultado, tipo, filename }) {
   ws.getColumn('valor').numFmt = '"$"#,##0.00';
   if (incluirBaja) ws.getColumn('baja').numFmt = 'dd/mm/yyyy';
 
-  for (const banco of ['produbanco', 'pichincha', 'guayaquil']) {
-    for (const r of resultado?.[banco] || []) {
-      const fila = {
-        codigoSap: r.codigoEmpleado || '',
-        nombre: r.nombre || '',
-        cedula: r.cedula || '',
-        valor: Number(r.monto) || 0,
-        cuenta: r.cuenta || '',
-        banco: LABEL_BANCO[banco] || banco,
-        tipoCuenta: r.tipoCuenta || '',
-        celular: r.celular || '',
-      };
-      if (incluirBaja) fila.baja = normalizarFecha(r.baja);
-      ws.addRow(fila);
+  const grupos = conEmpresa ? bloques : [{ empresa: null, resultado }];
+  for (const g of grupos) {
+    for (const banco of ['produbanco', 'pichincha', 'guayaquil']) {
+      for (const r of g.resultado?.[banco] || []) {
+        const fila = {
+          codigoSap: r.codigoEmpleado || '',
+          nombre: r.nombre || '',
+          cedula: r.cedula || '',
+          valor: Number(r.monto) || 0,
+          cuenta: r.cuenta || '',
+          banco: LABEL_BANCO[banco] || banco,
+          tipoCuenta: r.tipoCuenta || '',
+          celular: r.celular || '',
+        };
+        if (conEmpresa) fila.empresa = g.empresa;
+        if (incluirBaja) fila.baja = normalizarFecha(r.baja);
+        ws.addRow(fila);
+      }
     }
   }
 
@@ -98,6 +105,12 @@ export async function descargarDetalleExcel({ resultado, tipo, filename }) {
   ws.views = [{ state: 'frozen', ySplit: 1 }];
   ws.autoFilter = { from: { row: 1, column: 1 }, to: { row: 1, column: ws.columns.length } };
 
+  return wb;
+}
+
+/** Genera y descarga el Excel de detalle (ver armarDetalleExcel). */
+export async function descargarDetalleExcel({ resultado, bloques, tipo, filename }) {
+  const wb = await armarDetalleExcel({ resultado, bloques, tipo });
   const buffer = await wb.xlsx.writeBuffer();
   const blob = new Blob([buffer], {
     type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',

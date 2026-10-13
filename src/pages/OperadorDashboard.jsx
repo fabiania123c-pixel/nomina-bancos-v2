@@ -170,6 +170,7 @@ export default function OperadorDashboard({ perfil, onLogout }) {
     ? resultado.bloques.filter((b) => Object.values(b.resultado).some((f) => f.length > 0))
     : [];
   const variasEmpresas = objetivo.length > 1;
+  const detalleJunto = bloquesConDatos.length > 1; // dos empresas con datos -> un solo Excel de detalle
 
   // Las descargas solo existen después de finalizar: usan finales[empresa] (con el consecutivo real).
   function descargarBanco(bloque, bancoKey) {
@@ -211,6 +212,22 @@ export default function OperadorDashboard({ perfil, onLogout }) {
         resultado: bloque.resultado,
         tipo,
         filename: `detalle-nomina-${EMPRESAS[bloque.empresa]?.abrev || 'Super'}-${fctx.dd}${fctx.mm}${fctx.yyyy}.xlsx`,
+      });
+    } catch (err) {
+      console.error(err);
+      setErrorGeneral('No se pudo generar el Excel de detalle: ' + err.message);
+    }
+  }
+
+  // Con varias empresas en la corrida: UN solo Excel de detalle con columna EMPRESA.
+  async function descargarDetalleJunto() {
+    const fctx = finales[bloquesConDatos[0]?.empresa];
+    if (!fctx) return;
+    try {
+      await descargarDetalleExcel({
+        bloques: bloquesConDatos.map((b) => ({ empresa: EMPRESAS[b.empresa].label, resultado: b.resultado })),
+        tipo,
+        filename: `detalle-nomina-Mayoristas-${fctx.dd}${fctx.mm}${fctx.yyyy}.xlsx`,
       });
     } catch (err) {
       console.error(err);
@@ -449,9 +466,11 @@ export default function OperadorDashboard({ perfil, onLogout }) {
                         <button onClick={() => descargarPdf(bloque)} style={btnGhost}>
                           Descargar resumen PDF{variasEmpresas ? ` · ${EMPRESAS[bloque.empresa].label}` : ''}
                         </button>
-                        <button onClick={() => descargarDetalle(bloque)} style={btnGhost}>
-                          Descargar detalle (Excel){variasEmpresas ? ` · ${EMPRESAS[bloque.empresa].label}` : ''}
-                        </button>
+                        {!detalleJunto && (
+                          <button onClick={() => descargarDetalle(bloque)} style={btnGhost}>
+                            Descargar detalle (Excel){variasEmpresas ? ` · ${EMPRESAS[bloque.empresa].label}` : ''}
+                          </button>
+                        )}
                       </div>
                     )}
                   </div>
@@ -459,6 +478,9 @@ export default function OperadorDashboard({ perfil, onLogout }) {
               })}
 
               <div style={{ display: 'flex', gap: 10, marginTop: 20, flexWrap: 'wrap' }}>
+                {finalizado && detalleJunto && (
+                  <button onClick={descargarDetalleJunto} style={btnGhost}>Descargar detalle (Excel) · Equinox + Medeport</button>
+                )}
                 {finalizado ? (
                   <button disabled style={{ ...btnPrimary, opacity: 0.7, cursor: 'default' }}>Proceso finalizado ✓</button>
                 ) : (

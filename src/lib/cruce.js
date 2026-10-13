@@ -36,6 +36,7 @@ export function cruzarConDataMadre(filasPago, mapa, opts = {}) {
   const advertencias = [];
   const vistos = new Set();
   const resueltas = [];
+  const otrasEmpresas = [];
 
   // Índice por cédula (solo la sociedad elegida) para ids de 10 dígitos.
   const porCedula = new Map();
@@ -62,10 +63,16 @@ export function cruzarConDataMadre(filasPago, mapa, opts = {}) {
     return { filas: filas || null };
   }
 
+  // Si el Nº pers. no está en la empresa elegida pero sí en otra del grupo, no es un error:
+  // un mismo archivo de netos puede traer varias empresas (Mayoristas). Esas personas NO
+  // entran en esta corrida, pero se devuelven aparte para que se procesen con su empresa.
   function enOtraSociedad(id) {
     if (id.length === 10) return null;
     for (const s of SOCIEDADES) {
-      if (s !== sociedad && mapa.has(`${s}|${id}`)) return LABEL_SOCIEDAD[s] || s;
+      if (s !== sociedad && mapa.has(`${s}|${id}`)) {
+        const f = mapa.get(`${s}|${id}`)[0];
+        return { empresa: LABEL_SOCIEDAD[s] || s, nombre: f.nombre };
+      }
     }
     return null;
   }
@@ -86,12 +93,11 @@ export function cruzarConDataMadre(filasPago, mapa, opts = {}) {
     }
     if (!cands) {
       const otra = enOtraSociedad(fp.id);
-      errores.push({
-        ...base,
-        motivo: otra
-          ? `El Nº pers. ${fp.id} pertenece a ${otra}, no a ${labelEmpresa} — revisa la empresa elegida`
-          : `Nº pers. ${fp.id} no encontrado en la matriz de ${labelEmpresa}`,
-      });
+      if (otra) {
+        otrasEmpresas.push({ fila, nPers: fp.id, nombre: otra.nombre, empresa: otra.empresa, monto: fp.monto });
+        return;
+      }
+      errores.push({ ...base, motivo: `Nº pers. ${fp.id} no encontrado en la matriz` });
       return;
     }
 
@@ -216,5 +222,5 @@ export function cruzarConDataMadre(filasPago, mapa, opts = {}) {
     }
   });
 
-  return { resultado, errores, advertencias };
+  return { resultado, errores, advertencias, otrasEmpresas };
 }

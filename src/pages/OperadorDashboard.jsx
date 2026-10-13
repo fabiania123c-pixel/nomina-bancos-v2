@@ -126,6 +126,12 @@ export default function OperadorDashboard({ perfil, onLogout }) {
         sociedad: EMPRESAS[empresa].sociedad,
         tipo,
       });
+      const enEstaEmpresa = Object.values(cruce.resultado).reduce((a, f) => a + f.length, 0);
+      if (enEstaEmpresa === 0 && cruce.errores.length === 0 && cruce.otrasEmpresas.length > 0) {
+        const otras = [...new Set(cruce.otrasEmpresas.map((o) => o.empresa))].join(' y ');
+        setErrorGeneral(`Ninguna persona de este archivo es de ${EMPRESAS[empresa].label}: todas son de ${otras}. Cambia la empresa y vuelve a procesar.`);
+        return;
+      }
       if (!cuentaOrigen && cruce.resultado.produbanco.length > 0) {
         setErrorGeneral(`${EMPRESAS[empresa].label} todavía no tiene cuenta de origen configurada y hay pagos por Produbanco (la lleva cada línea del archivo) — avísale a Fabián antes de continuar.`);
         return;
@@ -332,6 +338,23 @@ export default function OperadorDashboard({ perfil, onLogout }) {
                 </div>
               ))}
               {resultado?.advertencias?.length > 20 && <div style={panelLine}>… y {resultado.advertencias.length - 20} más.</div>}
+            </Panel>
+          )}
+
+          {resultado?.otrasEmpresas?.length > 0 && (
+            <Panel tono="warn" titulo={`Este archivo también trae personas de otra empresa — NO entran en esta corrida de ${EMPRESAS[empresa].label}`}>
+              {Object.entries(
+                resultado.otrasEmpresas.reduce((acc, o) => {
+                  acc[o.empresa] = acc[o.empresa] || { n: 0, total: 0 };
+                  acc[o.empresa].n += 1;
+                  acc[o.empresa].total += Number(o.monto) || 0;
+                  return acc;
+                }, {})
+              ).map(([emp, info]) => (
+                <div key={emp} style={panelLine}>
+                  <strong>{emp}</strong>: {info.n} persona(s) · ${info.total.toLocaleString('en-US', { minimumFractionDigits: 2 })} — para pagarlas, cambia la empresa a {emp} y procesa este mismo archivo otra vez.
+                </div>
+              ))}
             </Panel>
           )}
 

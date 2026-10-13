@@ -8,17 +8,10 @@ import { EMPRESAS, EMPRESAS_KEYS } from '../lib/empresas.js';
 import { nombreArchivoBanco, nombrePdfResumen } from '../lib/nombresArchivo.js';
 import { descargarPdfResumen } from '../lib/pdf.js';
 import { descargarDetalleExcel } from '../lib/detalleExport.js';
-import { compararConHistorico, calcularKPIs, calcularPorPersona, filtrarPorEmpresa, LABEL_BANCO } from '../lib/kpis.js';
+import { compararConHistorico, filtrarPorEmpresa, LABEL_BANCO } from '../lib/kpis.js';
+import { PanelKPIs, CorridaCabecera, LineaBanco, ChipEstado, tarjetaCorridaStyle } from '../components/SeguimientoUI.jsx';
 
 const COLOR_BANCO = { produbanco: 'var(--bank-produbanco)', pichincha: 'var(--bank-pichincha)', guayaquil: 'var(--bank-guayaquil)' };
-
-const LABEL_TIPO = {
-  finiquito: 'Finiquitos',
-  prestamo: 'Préstamos',
-  jubilacion: 'Jubilación',
-  teletrabajo: 'Teletrabajo',
-  nomina_regular: 'Nómina regular',
-};
 
 const TIPOS = [
   { value: 'finiquito', label: 'Finiquitos' },
@@ -525,20 +518,12 @@ function VistaSeguimiento({ corridas: todas, empresasPermitidas }) {
   const [filtroBanco, setFiltroBanco] = useState('todos');
 
   if (todas.length === 0) {
-    return <p style={{ color: 'var(--muted)', fontSize: 13, marginTop: 24 }}>Todavía no hay corridas registradas.</p>;
+    return <p style={{ color: 'var(--muted)', fontSize: 14, marginTop: 24 }}>Todavía no hay corridas registradas.</p>;
   }
 
   // Selector de empresa solo si el usuario tiene más de una (Mayra y su equipo: Equinox / Medeport / Consolidado).
   const hayVariasEmpresas = empresasPermitidas.length > 1;
   const corridas = hayVariasEmpresas ? filtrarPorEmpresa(todas, filtroEmpresa) : todas;
-
-  const k = calcularKPIs(corridas);
-  const porPersona = calcularPorPersona(corridas);
-  const maxBanco = Math.max(1, ...Object.values(k.porBanco).map((b) => b.total));
-  const maxTipo = Math.max(1, ...Object.values(k.porTipo).map((t) => t.total));
-  const maxMes = Math.max(1, ...k.tendenciaMensual.map(([, total]) => total));
-  const maxEmpresa = Math.max(1, ...Object.values(k.porEmpresa).map((e) => e.total));
-  const maxPersona = Math.max(1, ...porPersona.map((p) => p.total));
 
   const filtradas = corridas.filter((c) => {
     if (filtroTipo !== 'todos' && c.tipo !== filtroTipo) return false;
@@ -553,7 +538,7 @@ function VistaSeguimiento({ corridas: todas, empresasPermitidas }) {
   return (
     <div style={{ marginTop: 20 }}>
       {hayVariasEmpresas && (
-        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 24 }}>
+        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 4 }}>
           <button type="button" onClick={() => setFiltroEmpresa('consolidado')} style={filtroEmpresa === 'consolidado' ? pillActivo : pillInactivo}>
             Consolidado
           </button>
@@ -564,83 +549,12 @@ function VistaSeguimiento({ corridas: todas, empresasPermitidas }) {
           ))}
         </div>
       )}
-      <div style={{ display: 'flex', gap: 14, flexWrap: 'wrap', marginBottom: 28 }}>
-        <StatCardSeg label="Total histórico movido" valor={`$${k.totalGeneral.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`} />
-        <StatCardSeg label="Registros procesados" valor={k.registrosGeneral.toLocaleString('en-US')} />
-        <StatCardSeg label="Corridas finalizadas" valor={`${k.corridasFinalizadas} / ${k.totalCorridas}`} />
-        <StatCardSeg label="Errores acumulados" valor={String(k.erroresGeneral)} alerta={k.erroresGeneral > 0} />
-      </div>
 
-      {hayVariasEmpresas && filtroEmpresa === 'consolidado' && Object.keys(k.porEmpresa).length > 1 && (
-        <ChartSectionSeg title="Por empresa">
-          {Object.entries(k.porEmpresa).map(([emp, info]) => (
-            <BarRowSeg
-              key={emp}
-              label={`${EMPRESAS[emp]?.label || emp} · ${info.corridas} corrida${info.corridas !== 1 ? 's' : ''}`}
-              value={`${info.registros} reg. · $${info.total.toLocaleString('en-US', { minimumFractionDigits: 2 })}`}
-              pct={(info.total / maxEmpresa) * 100}
-              color="var(--accent)"
-            />
-          ))}
-        </ChartSectionSeg>
-      )}
+      <PanelKPIs corridas={corridas} mostrarPorEmpresa={hayVariasEmpresas && filtroEmpresa === 'consolidado'} />
 
-      <ChartSectionSeg title="Por banco">
-        {Object.entries(k.porBanco).map(([banco, info]) => (
-          <BarRowSeg
-            key={banco}
-            label={LABEL_BANCO[banco]}
-            value={`${info.registros} reg. · $${info.total.toLocaleString('en-US', { minimumFractionDigits: 2 })}`}
-            pct={(info.total / maxBanco) * 100}
-            color={COLOR_BANCO[banco]}
-          />
-        ))}
-      </ChartSectionSeg>
+      <h2 style={{ fontSize: 18, fontWeight: 700, margin: '40px 0 14px', color: '#101828' }}>Historial de corridas</h2>
 
-      {Object.keys(k.porTipo).length > 0 && (
-        <ChartSectionSeg title="Por tipo de transacción">
-          {Object.entries(k.porTipo).map(([tipoKey, info]) => (
-            <BarRowSeg
-              key={tipoKey}
-              label={`${LABEL_TIPO[tipoKey] || tipoKey} · ${info.corridas} corrida${info.corridas !== 1 ? 's' : ''}`}
-              value={`$${info.total.toLocaleString('en-US', { minimumFractionDigits: 2 })}`}
-              pct={(info.total / maxTipo) * 100}
-              color="var(--accent-2)"
-            />
-          ))}
-        </ChartSectionSeg>
-      )}
-
-      {k.tendenciaMensual.length > 0 && (
-        <ChartSectionSeg title="Tendencia (últimos meses)">
-          <div style={{ display: 'flex', alignItems: 'flex-end', gap: 12, height: 130 }}>
-            {k.tendenciaMensual.map(([mes, total]) => (
-              <div key={mes} style={{ flex: 1, textAlign: 'center' }}>
-                <div style={{ background: 'var(--accent)', borderRadius: '4px 4px 0 0', height: `${(total / maxMes) * 92 + 6}px` }} title={`$${total.toFixed(2)}`} />
-                <div className="mono" style={{ fontSize: 10, color: 'var(--muted)', marginTop: 6 }}>{mes}</div>
-              </div>
-            ))}
-          </div>
-        </ChartSectionSeg>
-      )}
-
-      {porPersona.length > 0 && (
-        <ChartSectionSeg title="Por responsable">
-          {porPersona.map((p) => (
-            <BarRowSeg
-              key={p.nombre}
-              label={p.nombre}
-              value={`${p.corridas} corrida(s) · ${p.registros} reg. · $${p.total.toLocaleString('en-US', { minimumFractionDigits: 2 })}${p.errores > 0 ? `  ·  ${p.errores} error(es)` : ''}`}
-              pct={(p.total / maxPersona) * 100}
-              color="var(--accent-2)"
-            />
-          ))}
-        </ChartSectionSeg>
-      )}
-
-      <h2 style={{ fontSize: 15, fontWeight: 600, margin: '36px 0 14px' }}>Historial de corridas</h2>
-
-      <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', marginBottom: 12 }}>
+      <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', marginBottom: 14 }}>
         <input
           placeholder="Buscar por responsable…"
           value={busqueda}
@@ -664,7 +578,7 @@ function VistaSeguimiento({ corridas: todas, empresasPermitidas }) {
       </div>
 
       {filtradas.length === 0 ? (
-        <p style={{ color: 'var(--muted)', fontSize: 13 }}>Nada coincide con ese filtro.</p>
+        <p style={{ color: 'var(--muted)', fontSize: 14 }}>Nada coincide con ese filtro.</p>
       ) : (
         filtradas.map((c) => <FilaSeguimiento key={c.id} corrida={c} />)
       )}
@@ -675,80 +589,18 @@ function VistaSeguimiento({ corridas: todas, empresasPermitidas }) {
 function FilaSeguimiento({ corrida: c }) {
   const anulada = c.anulada;
   return (
-    <div style={{ ...rowCardSeg, opacity: anulada ? 0.7 : 1 }}>
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
-        <div>
-          <div style={{ fontWeight: 600, fontSize: 14 }}>
-            {LABEL_TIPO[c.tipo] || c.tipo}
-            <span style={badgeEmpresaSeg}>{EMPRESAS[c.empresa]?.label || 'Superdeporte'}</span>
-            {anulada && <span style={{ ...badgeAnuladaSeg, marginLeft: 8 }}>Anulada</span>}
-          </div>
-          <div style={{ fontSize: 12, color: 'var(--muted)', marginTop: 3 }}>
-            {new Date(c.fecha).toLocaleString('es-EC')} · {c.generadoPorNombre}
-          </div>
-        </div>
-        {!anulada && (
-          <span style={{ fontSize: 11.5, fontWeight: 600, color: c.finalizado ? 'var(--ok)' : 'var(--warn)' }}>
-            {c.finalizado ? 'Finalizado' : 'Pendiente'}
-          </span>
-        )}
-      </div>
+    <div style={{ ...tarjetaCorridaStyle, opacity: anulada ? 0.7 : 1 }}>
+      <CorridaCabecera corrida={c} />
 
-      {anulada && <div style={{ fontSize: 12.5, color: 'var(--err)', marginTop: 6 }}>{c.notaAnulacion}</div>}
+      {anulada && <div style={{ fontSize: 13.5, color: 'var(--err)', marginTop: 8 }}>{c.notaAnulacion}</div>}
 
-      <div style={{ marginTop: 12, display: 'flex', flexDirection: 'column', gap: 6 }}>
-        {Object.entries(c.detalle_bancos || {}).map(([banco, info]) => {
-          const subido = c.subidoBanco?.[banco];
-          return (
-            <div key={banco} style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', borderLeft: `2px solid ${COLOR_BANCO[banco]}`, paddingLeft: 8 }}>
-              <span className="mono" style={{ fontSize: 12 }}>
-                {LABEL_BANCO[banco]} · {info.registros} reg. · ${info.total?.toFixed(2)}
-              </span>
-              {subido ? (
-                <span style={badgeSubidoSeg}>✓ Subido {new Date(subido.at).toLocaleDateString('es-EC')} · {subido.por}</span>
-              ) : (
-                <span style={badgePendienteSeg}>Pendiente de subir al banco</span>
-              )}
-            </div>
-          );
-        })}
+      <div style={{ marginTop: 14, display: 'flex', flexDirection: 'column', gap: 10 }}>
+        {Object.entries(c.detalle_bancos || {}).map(([banco, info]) => (
+          <LineaBanco key={banco} banco={banco} info={info} subido={c.subidoBanco?.[banco]} />
+        ))}
         {c.registros_con_error > 0 && (
-          <span style={{ fontSize: 12, color: 'var(--err)' }}>{c.registros_con_error} error(es)</span>
+          <ChipEstado tipo="error">{c.registros_con_error} error(es)</ChipEstado>
         )}
-      </div>
-    </div>
-  );
-}
-
-function ChartSectionSeg({ title, children }) {
-  return (
-    <section style={{ marginBottom: 30 }}>
-      <h2 style={{ fontSize: 13, fontWeight: 600, color: 'var(--ink)', margin: '0 0 16px' }}>{title}</h2>
-      {children}
-    </section>
-  );
-}
-
-function BarRowSeg({ label, value, pct, color }) {
-  return (
-    <div style={{ marginBottom: 14 }}>
-      <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12.5, marginBottom: 5 }}>
-        <strong style={{ fontWeight: 600 }}>{label}</strong>
-        <span className="mono" style={{ color: 'var(--muted)' }}>{value}</span>
-      </div>
-      <div style={barTrackSeg}>
-        <div style={{ ...barFillSeg, width: `${pct}%`, background: color }} />
-      </div>
-    </div>
-  );
-}
-
-function StatCardSeg({ label, valor, alerta }) {
-  return (
-    <div style={statCardSeg}>
-      <div style={{ fontSize: 11.5, color: 'var(--muted)', fontWeight: 600 }}>{label}</div>
-      <div className="mono" style={{ fontSize: 21, fontWeight: 600, color: alerta ? 'var(--err)' : 'var(--ink)', marginTop: 6 }}>
-        {valor}
       </div>
     </div>
   );
@@ -824,8 +676,8 @@ const input = { border: '1.5px solid var(--line)', borderRadius: 8, padding: '9p
 const fechaAuto = { border: '1.5px solid var(--line)', borderRadius: 8, padding: '9px 11px', fontSize: 13.5, background: 'var(--line-soft)', color: 'var(--muted)', display: 'flex', alignItems: 'center' };
 const btnPrimary = { background: 'var(--accent)', color: '#fff', border: 'none', borderRadius: 8, padding: '11px 20px', fontSize: 13.5, fontWeight: 600, cursor: 'pointer' };
 const btnGhost = { background: '#fff', border: '1.5px solid var(--line)', borderRadius: 8, padding: '9px 16px', fontSize: 12.5, cursor: 'pointer', fontFamily: 'inherit' };
-const pillActivo = { background: 'var(--accent)', color: '#fff', border: '1.5px solid var(--accent)', borderRadius: 20, padding: '8px 16px', fontSize: 12.5, fontWeight: 600, cursor: 'pointer', fontFamily: 'inherit' };
-const pillInactivo = { background: '#fff', color: 'var(--ink)', border: '1.5px solid var(--line)', borderRadius: 20, padding: '8px 16px', fontSize: 12.5, fontWeight: 600, cursor: 'pointer', fontFamily: 'inherit' };
+const pillActivo = { background: 'var(--accent)', color: '#fff', border: '1.5px solid var(--accent)', borderRadius: 20, padding: '9px 18px', fontSize: 14, fontWeight: 600, cursor: 'pointer', fontFamily: 'inherit' };
+const pillInactivo = { background: '#fff', color: 'var(--ink)', border: '1.5px solid var(--line)', borderRadius: 20, padding: '9px 18px', fontSize: 14, fontWeight: 600, cursor: 'pointer', fontFamily: 'inherit' };
 const errBox = { color: 'var(--err)', fontSize: 12.5, marginTop: 12 };
 const filaBanco = { display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '13px 0', borderBottom: '1px solid var(--line-soft)' };
 const bankDot = { width: 9, height: 9, borderRadius: '50%', display: 'inline-block', flexShrink: 0 };
@@ -840,12 +692,4 @@ const previewBox = {
 };
 const previewLine = { fontSize: 11, color: '#B7C0E8', whiteSpace: 'pre', lineHeight: 1.6 };
 const panelLine = { fontSize: 12.5, marginBottom: 4, color: 'var(--ink)' };
-const statCardSeg = { background: '#fff', border: '1px solid var(--line)', borderRadius: 12, padding: '16px 18px', flex: '1 1 180px', minWidth: 170 };
-const barTrackSeg = { background: 'var(--line-soft)', borderRadius: 6, height: 9, overflow: 'hidden' };
-const barFillSeg = { height: '100%', borderRadius: 6 };
-const filtroInputSeg = { border: '1.5px solid var(--line)', borderRadius: 8, padding: '8px 11px', fontSize: 12.5, fontFamily: 'inherit', background: '#fff' };
-const rowCardSeg = { padding: '16px 0', borderBottom: '1px solid var(--line-soft)' };
-const badgeAnuladaSeg = { fontSize: 10.5, fontWeight: 700, color: 'var(--err)', background: 'var(--err-bg)', borderRadius: 5, padding: '2px 7px' };
-const badgeSubidoSeg = { fontSize: 10.5, fontWeight: 700, color: 'var(--ok)', background: 'rgba(22,163,74,0.12)', borderRadius: 5, padding: '2px 7px', whiteSpace: 'nowrap' };
-const badgePendienteSeg = { fontSize: 10.5, fontWeight: 700, color: 'var(--warn)', background: 'var(--warn-bg)', borderRadius: 5, padding: '2px 7px', whiteSpace: 'nowrap' };
-const badgeEmpresaSeg = { fontSize: 10.5, fontWeight: 700, color: 'var(--accent)', background: 'var(--line-soft)', borderRadius: 5, padding: '2px 7px', marginLeft: 8, whiteSpace: 'nowrap' };
+const filtroInputSeg = { border: '1.5px solid var(--line)', borderRadius: 8, padding: '9px 12px', fontSize: 14, fontFamily: 'inherit', background: '#fff' };

@@ -7,7 +7,7 @@ import { descargarPdfResumen } from '../lib/pdf.js';
 import { descargarDetalleExcel } from '../lib/detalleExport.js';
 import { buildFileContent } from '../lib/bankProfiles.js';
 import { EMPRESAS, EMPRESAS_KEYS } from '../lib/empresas.js';
-import { nombreArchivoBanco, nombrePdfResumen } from '../lib/nombresArchivo.js';
+import { nombreArchivoBanco, nombrePdfResumen, nombreDetalleExcel } from '../lib/nombresArchivo.js';
 
 
 export default function AdminDashboard({ perfil, onLogout }) {
@@ -134,7 +134,7 @@ function VistaProcesos({ corridas, perfil }) {
           <option value="prestamo">Préstamos</option>
           <option value="jubilacion">Jubilación</option>
           <option value="teletrabajo">Teletrabajo</option>
-          <option value="nomina_regular">Nómina regular (histórico)</option>
+          <option value="nomina_regular">Rebotes</option>
         </select>
         <select value={filtroBanco} onChange={(e) => setFiltroBanco(e.target.value)} style={filtroInput}>
           <option value="todos">Todos los bancos</option>
@@ -183,7 +183,7 @@ function CorridaRow({ corrida: c, perfil }) {
       fecha: `${ddF}/${mmF}/${yyyyF}`,
       generadoPor: c.generadoPorNombre,
       detalleBancos: c.detalle_bancos,
-      filename: nombrePdfResumen({ empresa, dd: ddF, mm: mmF, yyyy: yyyyF }),
+      filename: nombrePdfResumen({ empresa, tipo: c.tipo, dd: ddF, mm: mmF, yyyy: yyyyF }),
     });
   }
 
@@ -196,7 +196,7 @@ function CorridaRow({ corrida: c, perfil }) {
         setError('No se encontró el archivo guardado para esta corrida.');
         return;
       }
-      const ctx = { ...archivos.ctx, empresa, secuencia: c.secuencia_guayaquil ?? archivos.ctx?.secuencia ?? null };
+      const ctx = { ...archivos.ctx, empresa, tipo: c.tipo, secuencia: c.secuencia_guayaquil ?? archivos.ctx?.secuencia ?? null };
       const content = buildFileContent(banco, archivos.filas_por_banco[banco], ctx);
       const filename = nombreArchivoBanco(banco, ctx);
       const blob = new Blob([content], { type: 'text/plain;charset=utf-8' });
@@ -228,7 +228,7 @@ function CorridaRow({ corrida: c, perfil }) {
       await descargarDetalleExcel({
         resultado: archivos.filas_por_banco,
         tipo: c.tipo,
-        filename: `detalle-nomina-${EMPRESAS[empresa]?.abrev || 'Super'}-${ddF}${mmF}${yyyyF}.xlsx`,
+        filename: nombreDetalleExcel({ empresa, tipo: c.tipo, dd: ddF, mm: mmF, yyyy: yyyyF }),
       });
     } catch (err) {
       console.error(err);

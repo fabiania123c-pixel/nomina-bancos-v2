@@ -14,7 +14,7 @@ export const LABEL_TIPO = {
   prestamo: 'Préstamos',
   jubilacion: 'Jubilación',
   teletrabajo: 'Teletrabajo',
-  nomina_regular: 'Nómina regular',
+  nomina_regular: 'Rebotes',
 };
 
 export const COLOR_EMPRESA = {

@@ -3,7 +3,7 @@ import jsPDF from 'jspdf';
 const LABEL_BANCO = { produbanco: 'Produbanco', pichincha: 'Banco Pichincha', guayaquil: 'Banco de Guayaquil' };
 const LABEL_TIPO = {
   finiquito: 'Finiquitos',
-  nomina_regular: 'Nómina regular',
+  nomina_regular: 'Rebotes',
   prestamo: 'Préstamos',
   jubilacion: 'Jubilación',
   teletrabajo: 'Teletrabajo',

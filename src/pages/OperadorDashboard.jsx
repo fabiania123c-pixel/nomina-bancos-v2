@@ -5,7 +5,7 @@ import { cruzarVariasEmpresas } from '../lib/cruce.js';
 import { buildFileContent } from '../lib/bankProfiles.js';
 import { registrarCorridaFinal, getHistorialCorridas, getMisEmpresas } from '../lib/historial.js';
 import { EMPRESAS, EMPRESAS_KEYS } from '../lib/empresas.js';
-import { nombreArchivoBanco, nombrePdfResumen } from '../lib/nombresArchivo.js';
+import { nombreArchivoBanco, nombrePdfResumen, nombreDetalleExcel } from '../lib/nombresArchivo.js';
 import { descargarPdfResumen } from '../lib/pdf.js';
 import { descargarDetalleExcel } from '../lib/detalleExport.js';
 import { compararConHistorico, filtrarPorEmpresa, LABEL_BANCO } from '../lib/kpis.js';
@@ -170,7 +170,7 @@ export default function OperadorDashboard({ perfil, onLogout }) {
     const fctx = finales[bloque.empresa];
     if (!fctx) return;
     const content = buildFileContent(bancoKey, bloque.resultado[bancoKey], fctx);
-    const filename = nombreArchivoBanco(bancoKey, fctx);
+    const filename = nombreArchivoBanco(bancoKey, { ...fctx, tipo });
     const blob = new Blob([content], { type: 'text/plain;charset=utf-8' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
@@ -193,7 +193,7 @@ export default function OperadorDashboard({ perfil, onLogout }) {
       fecha: `${d}/${m}/${y}`,
       generadoPor: perfil.nombre,
       detalleBancos: detalleBancos(bloque),
-      filename: nombrePdfResumen({ empresa: bloque.empresa, dd: d, mm: m, yyyy: y }),
+      filename: nombrePdfResumen({ empresa: bloque.empresa, tipo, dd: d, mm: m, yyyy: y }),
     });
   }
 
@@ -204,7 +204,7 @@ export default function OperadorDashboard({ perfil, onLogout }) {
       await descargarDetalleExcel({
         resultado: bloque.resultado,
         tipo,
-        filename: `detalle-nomina-${EMPRESAS[bloque.empresa]?.abrev || 'Super'}-${fctx.dd}${fctx.mm}${fctx.yyyy}.xlsx`,
+        filename: nombreDetalleExcel({ empresa: bloque.empresa, tipo, dd: fctx.dd, mm: fctx.mm, yyyy: fctx.yyyy }),
       });
     } catch (err) {
       console.error(err);
@@ -220,7 +220,7 @@ export default function OperadorDashboard({ perfil, onLogout }) {
       await descargarDetalleExcel({
         bloques: bloquesConDatos.map((b) => ({ empresa: EMPRESAS[b.empresa].label, resultado: b.resultado })),
         tipo,
-        filename: `detalle-nomina-Mayoristas-${fctx.dd}${fctx.mm}${fctx.yyyy}.xlsx`,
+        filename: nombreDetalleExcel({ empresas: bloquesConDatos.map((b) => b.empresa), tipo, dd: fctx.dd, mm: fctx.mm, yyyy: fctx.yyyy }),
       });
     } catch (err) {
       console.error(err);
@@ -430,7 +430,7 @@ export default function OperadorDashboard({ perfil, onLogout }) {
                                 {previaAbierta[kPrevia] ? 'Ocultar vista previa' : 'Vista previa'}
                               </button>
                               {fctx && (
-                                <button onClick={() => descargarBanco(bloque, banco)} style={btnGhost} title={nombreArchivoBanco(banco, fctx)}>
+                                <button onClick={() => descargarBanco(bloque, banco)} style={btnGhost} title={nombreArchivoBanco(banco, { ...fctx, tipo })}>
                                   Descargar .txt
                                 </button>
                               )}
@@ -567,7 +567,7 @@ function VistaSeguimiento({ corridas: todas, empresasPermitidas }) {
           <option value="prestamo">Préstamos</option>
           <option value="jubilacion">Jubilación</option>
           <option value="teletrabajo">Teletrabajo</option>
-          <option value="nomina_regular">Nómina regular (histórico)</option>
+          <option value="nomina_regular">Rebotes</option>
         </select>
         <select value={filtroBanco} onChange={(e) => setFiltroBanco(e.target.value)} style={filtroInputSeg}>
           <option value="todos">Todos los bancos</option>

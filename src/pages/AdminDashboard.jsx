@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import AppShell from '../components/AppShell.jsx';
 import { getHistorialCorridas, getArchivosCorrida, marcarSubidoBanco } from '../lib/historial.js';
-import { corridasRecientes, filtrarPorEmpresa, LABEL_BANCO } from '../lib/kpis.js';
+import { filtrarPorEmpresa, LABEL_BANCO } from '../lib/kpis.js';
 import { PanelKPIs, CorridaCabecera, LineaBanco, ChipEstado, tarjetaCorridaStyle } from '../components/SeguimientoUI.jsx';
 import { descargarPdfResumen } from '../lib/pdf.js';
 import { descargarDetalleExcel } from '../lib/detalleExport.js';
@@ -24,8 +24,19 @@ export default function AdminDashboard({ perfil, onLogout }) {
     });
   }, []);
 
-  const recientes = corridasRecientes(corridas, 48);
+  // "Por revisar" = corridas finalizadas, no anuladas, con al menos un banco todavía sin confirmar como subido.
+  // Se va apagando solo a medida que se confirma la subida de cada banco.
+  const recientes = corridas.filter(
+    (c) => c.finalizado && !c.anulada && Object.keys(c.detalle_bancos || {}).some((banco) => !c.subidoBanco?.[banco])
+  );
   const corridasVista = filtrarPorEmpresa(corridas, filtroEmpresa);
+
+  // Cuando se confirma la subida de un banco, se actualiza la lista en memoria para que el contador baje al instante.
+  function alConfirmarSubido(corridaId, banco, confirmado) {
+    setCorridas((prev) =>
+      prev.map((x) => (x.id === corridaId ? { ...x, subidoBanco: { ...(x.subidoBanco || {}), [banco]: confirmado } } : x))
+    );
+  }
 
   const nav = [
     { label: 'Inicio', active: vista === 'home', onClick: () => setVista('home') },
@@ -72,7 +83,7 @@ export default function AdminDashboard({ perfil, onLogout }) {
         </div>
       )}
 
-      {!cargando && vista === 'procesos' && <VistaProcesos corridas={corridasVista} perfil={perfil} />}
+      {!cargando && vista === 'procesos' && <VistaProcesos corridas={corridasVista} perfil={perfil} alConfirmarSubido={alConfirmarSubido} />}
       {!cargando && vista === 'kpis' && <VistaKPIs corridas={corridasVista} mostrarPorEmpresa={filtroEmpresa === 'consolidado'} />}
     </AppShell>
   );
@@ -83,14 +94,14 @@ function BoxHome({ titulo, descripcion, badge, onClick }) {
     <div onClick={onClick} style={boxHome}>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
         <h2 style={{ margin: 0, fontSize: 15.5, fontWeight: 600 }}>{titulo}</h2>
-        {badge && <span style={badgeStyle}>{badge} nuevo{badge > 1 ? 's' : ''}</span>}
+        {badge && <span style={badgeStyle}>{badge} por revisar</span>}
       </div>
       <p style={{ fontSize: 12.5, color: 'var(--muted)', marginTop: 10, lineHeight: 1.5 }}>{descripcion}</p>
     </div>
   );
 }
 
-function VistaProcesos({ corridas, perfil }) {
+function VistaProcesos({ corridas, perfil, alConfirmarSubido }) {
   const [busqueda, setBusqueda] = useState('');
   const [filtroTipo, setFiltroTipo] = useState('todos');
   const [filtroBanco, setFiltroBanco] = useState('todos');
@@ -149,7 +160,7 @@ function VistaProcesos({ corridas, perfil }) {
       ) : (
         <div style={{ marginTop: 8 }}>
           {filtradas.map((c) => (
-            <CorridaRow key={c.id} corrida={c} perfil={perfil} />
+            <CorridaRow key={c.id} corrida={c} perfil={perfil} alConfirmarSubido={alConfirmarSubido} />
           ))}
         </div>
       )}
@@ -157,7 +168,7 @@ function VistaProcesos({ corridas, perfil }) {
   );
 }
 
-function CorridaRow({ corrida: c, perfil }) {
+function CorridaRow({ corrida: c, perfil, alConfirmarSubido }) {
   const [descargando, setDescargando] = useState(null);
   const [descargandoDetalle, setDescargandoDetalle] = useState(false);
   const [error, setError] = useState('');
@@ -242,12 +253,10 @@ function CorridaRow({ corrida: c, perfil }) {
     setError('');
     setMarcando(banco);
     try {
-      const nombreQuienConfirma = perfil?.nombre || 'Admin';
-      await marcarSubidoBanco(c.id, banco, nombreQuienConfirma);
-      setSubidoBancoLocal((prev) => ({
-        ...prev,
-        [banco]: { at: new Date().toISOString(), por: nombreQuienConfirma },
-      }));
+      // Devuelve lo que quedó GUARDADO en la base (fecha y nombre reales), no un valor inventado en pantalla.
+      const confirmado = await marcarSubidoBanco(c.id, banco);
+      setSubidoBancoLocal((prev) => ({ ...prev, [banco]: confirmado }));
+      if (alConfirmarSubido) alConfirmarSubido(c.id, banco, confirmado);
     } catch (err) {
       console.error(err);
       setError(`No se pudo confirmar la subida a ${LABEL_BANCO[banco]}: ` + err.message);

@@ -8,14 +8,19 @@ import { descargarDetalleExcel } from '../lib/detalleExport.js';
 import { buildFileContent } from '../lib/bankProfiles.js';
 import { EMPRESAS, EMPRESAS_KEYS } from '../lib/empresas.js';
 import { nombreArchivoBanco, nombrePdfResumen, nombreDetalleExcel } from '../lib/nombresArchivo.js';
+import { useEstadoPersistente } from '../lib/useEstadoPersistente.js';
+import { useDescargados, estiloDescarga, textoDescarga } from '../lib/descargados.js';
 
 
 export default function AdminDashboard({ perfil, onLogout }) {
   const [corridas, setCorridas] = useState([]);
   const [cargando, setCargando] = useState(true);
-  const [vista, setVista] = useState('home');
+  // La pantalla en la que está y el filtro de empresa se recuerdan: si la página se recarga o se vuelve a montar,
+  // la persona sigue donde estaba (no regresa al inicio).
+  const idUsuario = perfil?.id || perfil?.nombre || 'admin';
+  const [vista, setVista] = useEstadoPersistente(`nomina:${idUsuario}:admin:vista`, 'home');
   // 'consolidado' = las 3 empresas juntas; si no, 'superdeporte' | 'equinox' | 'medeport'
-  const [filtroEmpresa, setFiltroEmpresa] = useState('consolidado');
+  const [filtroEmpresa, setFiltroEmpresa] = useEstadoPersistente(`nomina:${idUsuario}:admin:empresa`, 'consolidado');
 
   useEffect(() => {
     getHistorialCorridas(500).then((data) => {
@@ -83,7 +88,7 @@ export default function AdminDashboard({ perfil, onLogout }) {
         </div>
       )}
 
-      {!cargando && vista === 'procesos' && <VistaProcesos corridas={corridasVista} perfil={perfil} alConfirmarSubido={alConfirmarSubido} />}
+      {!cargando && vista === 'procesos' && <VistaProcesos corridas={corridasVista} perfil={perfil} idUsuario={idUsuario} alConfirmarSubido={alConfirmarSubido} />}
       {!cargando && vista === 'kpis' && <VistaKPIs corridas={corridasVista} mostrarPorEmpresa={filtroEmpresa === 'consolidado'} />}
     </AppShell>
   );
@@ -101,10 +106,10 @@ function BoxHome({ titulo, descripcion, badge, onClick }) {
   );
 }
 
-function VistaProcesos({ corridas, perfil, alConfirmarSubido }) {
-  const [busqueda, setBusqueda] = useState('');
-  const [filtroTipo, setFiltroTipo] = useState('todos');
-  const [filtroBanco, setFiltroBanco] = useState('todos');
+function VistaProcesos({ corridas, perfil, idUsuario, alConfirmarSubido }) {
+  const [busqueda, setBusqueda] = useEstadoPersistente(`nomina:${idUsuario}:admin:busqueda`, '');
+  const [filtroTipo, setFiltroTipo] = useEstadoPersistente(`nomina:${idUsuario}:admin:tipo`, 'todos');
+  const [filtroBanco, setFiltroBanco] = useEstadoPersistente(`nomina:${idUsuario}:admin:banco`, 'todos');
 
   if (corridas.length === 0) {
     return (
@@ -160,7 +165,7 @@ function VistaProcesos({ corridas, perfil, alConfirmarSubido }) {
       ) : (
         <div style={{ marginTop: 8 }}>
           {filtradas.map((c) => (
-            <CorridaRow key={c.id} corrida={c} perfil={perfil} alConfirmarSubido={alConfirmarSubido} />
+            <CorridaRow key={c.id} corrida={c} perfil={perfil} soloBanco={filtroBanco === 'todos' ? null : filtroBanco} alConfirmarSubido={alConfirmarSubido} />
           ))}
         </div>
       )}
@@ -168,7 +173,8 @@ function VistaProcesos({ corridas, perfil, alConfirmarSubido }) {
   );
 }
 
-function CorridaRow({ corrida: c, perfil, alConfirmarSubido }) {
+function CorridaRow({ corrida: c, perfil, soloBanco, alConfirmarSubido }) {
+  const { hecho, marcar } = useDescargados(c.id);
   const [descargando, setDescargando] = useState(null);
   const [descargandoDetalle, setDescargandoDetalle] = useState(false);
   const [error, setError] = useState('');
@@ -180,13 +186,22 @@ function CorridaRow({ corrida: c, perfil, alConfirmarSubido }) {
   const notaAnulacion = c.notaAnulacion;
   const subidoBancoEfectivo = { ...(c.subidoBanco || {}), ...subidoBancoLocal };
 
+  // Bancos que se muestran: todos, o solo el que se eligió en el filtro.
+  const bancosVisibles = Object.keys(c.detalle_bancos || {}).filter((b) => !soloBanco || b === soloBanco);
+
   const empresa = c.empresa || 'superdeporte';
   const fechaCorrida = new Date(c.fecha);
   const ddF = String(fechaCorrida.getDate()).padStart(2, '0');
   const mmF = String(fechaCorrida.getMonth() + 1).padStart(2, '0');
   const yyyyF = String(fechaCorrida.getFullYear());
+  // La fecha del NOMBRE de cada archivo es la del día en que se descarga (se toma al hacer clic).
+  const fechaDescarga = () => {
+    const h = new Date();
+    return { dd: String(h.getDate()).padStart(2, '0'), mm: String(h.getMonth() + 1).padStart(2, '0'), yyyy: String(h.getFullYear()) };
+  };
 
   function descargarPdf() {
+    const hoy = fechaDescarga();
     descargarPdfResumen({
       tipo: c.tipo,
       empresa: EMPRESAS[empresa]?.label,
@@ -194,8 +209,9 @@ function CorridaRow({ corrida: c, perfil, alConfirmarSubido }) {
       fecha: `${ddF}/${mmF}/${yyyyF}`,
       generadoPor: c.generadoPorNombre,
       detalleBancos: c.detalle_bancos,
-      filename: nombrePdfResumen({ empresa, tipo: c.tipo, dd: ddF, mm: mmF, yyyy: yyyyF }),
+      filename: nombrePdfResumen({ empresa, tipo: c.tipo, ...hoy }),
     });
+    marcar('resumen');
   }
 
   async function descargarTxt(banco) {
@@ -209,7 +225,7 @@ function CorridaRow({ corrida: c, perfil, alConfirmarSubido }) {
       }
       const ctx = { ...archivos.ctx, empresa, tipo: c.tipo, secuencia: c.secuencia_guayaquil ?? archivos.ctx?.secuencia ?? null };
       const content = buildFileContent(banco, archivos.filas_por_banco[banco], ctx);
-      const filename = nombreArchivoBanco(banco, ctx);
+      const filename = nombreArchivoBanco(banco, { ...ctx, ...fechaDescarga() });
       const blob = new Blob([content], { type: 'text/plain;charset=utf-8' });
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
@@ -219,6 +235,7 @@ function CorridaRow({ corrida: c, perfil, alConfirmarSubido }) {
       a.click();
       document.body.removeChild(a);
       URL.revokeObjectURL(url);
+      marcar(`txt:${banco}`);
     } catch (err) {
       console.error(err);
       setError('No se pudo descargar: ' + err.message);
@@ -239,8 +256,9 @@ function CorridaRow({ corrida: c, perfil, alConfirmarSubido }) {
       await descargarDetalleExcel({
         resultado: archivos.filas_por_banco,
         tipo: c.tipo,
-        filename: nombreDetalleExcel({ empresa, tipo: c.tipo, dd: ddF, mm: mmF, yyyy: yyyyF }),
+        filename: nombreDetalleExcel({ empresa, tipo: c.tipo, ...fechaDescarga() }),
       });
+      marcar('detalle');
     } catch (err) {
       console.error(err);
       setError('No se pudo descargar el detalle: ' + err.message);
@@ -252,13 +270,20 @@ function CorridaRow({ corrida: c, perfil, alConfirmarSubido }) {
   async function marcarSubido(banco) {
     setError('');
     setMarcando(banco);
+    // Se pinta de verde al instante; si el servidor no lo puede guardar, se revierte y sale el error en rojo.
+    setSubidoBancoLocal((prev) => ({ ...prev, [banco]: { at: new Date().toISOString(), por: perfil?.nombre || 'Admin' } }));
     try {
-      // Devuelve lo que quedó GUARDADO en la base (fecha y nombre reales), no un valor inventado en pantalla.
+      // Devuelve lo que quedó GUARDADO en la base (fecha y nombre reales).
       const confirmado = await marcarSubidoBanco(c.id, banco);
       setSubidoBancoLocal((prev) => ({ ...prev, [banco]: confirmado }));
       if (alConfirmarSubido) alConfirmarSubido(c.id, banco, confirmado);
     } catch (err) {
       console.error(err);
+      setSubidoBancoLocal((prev) => {
+        const sig = { ...prev };
+        delete sig[banco];
+        return sig;
+      });
       setError(`No se pudo confirmar la subida a ${LABEL_BANCO[banco]}: ` + err.message);
     } finally {
       setMarcando(null);
@@ -277,29 +302,31 @@ function CorridaRow({ corrida: c, perfil, alConfirmarSubido }) {
 
       <div style={{ marginTop: 14, display: 'flex', justifyContent: 'space-between', alignItems: 'flex-end', flexWrap: 'wrap', gap: 16 }}>
         <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-          {Object.entries(c.detalle_bancos || {}).map(([banco, info]) => (
-            <LineaBanco key={banco} banco={banco} info={info} subido={subidoBancoEfectivo[banco]} />
-          ))}
+          {Object.entries(c.detalle_bancos || {})
+            .filter(([banco]) => bancosVisibles.includes(banco))
+            .map(([banco, info]) => (
+              <LineaBanco key={banco} banco={banco} info={info} subido={subidoBancoEfectivo[banco]} />
+            ))}
           {c.registros_con_error > 0 && (
             <ChipEstado tipo="error">{c.registros_con_error} error(es)</ChipEstado>
           )}
         </div>
         <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', justifyContent: 'flex-end' }}>
-          {Object.keys(c.detalle_bancos || {}).map((banco) => (
-            <button key={banco} onClick={() => descargarTxt(banco)} disabled={descargando === banco} style={btnGhost}>
-              {descargando === banco ? '…' : `${LABEL_BANCO[banco]} · .txt`}
+          {bancosVisibles.map((banco) => (
+            <button key={banco} onClick={() => descargarTxt(banco)} disabled={descargando === banco} style={estiloDescarga(btnGhost, hecho(`txt:${banco}`))}>
+              {descargando === banco ? '…' : textoDescarga(`${LABEL_BANCO[banco]} · .txt`, hecho(`txt:${banco}`))}
             </button>
           ))}
-          <button onClick={descargarPdf} style={btnGhost}>Descargar PDF</button>
-          <button onClick={descargarDetalle} disabled={descargandoDetalle} style={btnGhost}>
-            {descargandoDetalle ? '…' : 'Descargar detalle'}
+          <button onClick={descargarPdf} style={estiloDescarga(btnGhost, hecho('resumen'))}>{textoDescarga('Descargar resumen', hecho('resumen'))}</button>
+          <button onClick={descargarDetalle} disabled={descargandoDetalle} style={estiloDescarga(btnGhost, hecho('detalle'))}>
+            {descargandoDetalle ? '…' : textoDescarga('Descargar detalle', hecho('detalle'))}
           </button>
         </div>
       </div>
 
       {!anulada && (
         <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', justifyContent: 'flex-end', marginTop: 10 }}>
-          {Object.keys(c.detalle_bancos || {})
+          {bancosVisibles
             .filter((banco) => !subidoBancoEfectivo[banco])
             .map((banco) => (
               <button key={`subir-${banco}`} onClick={() => marcarSubido(banco)} disabled={marcando === banco} style={btnConfirmarSubido}>

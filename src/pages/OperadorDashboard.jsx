@@ -3,13 +3,15 @@ import AppShell from '../components/AppShell.jsx';
 import { parseDataMadre, parseArchivoPago } from '../lib/excelParser.js';
 import { cruzarVariasEmpresas } from '../lib/cruce.js';
 import { buildFileContent } from '../lib/bankProfiles.js';
-import { registrarCorridaFinal, getHistorialCorridas, getMisEmpresas } from '../lib/historial.js';
+import { registrarCorridaFinal, getHistorialCorridas, getMisEmpresas, getMiId } from '../lib/historial.js';
 import { EMPRESAS, EMPRESAS_KEYS } from '../lib/empresas.js';
 import { nombreArchivoBanco, nombrePdfResumen, nombreDetalleExcel } from '../lib/nombresArchivo.js';
 import { descargarPdfResumen } from '../lib/pdf.js';
 import { descargarDetalleExcel } from '../lib/detalleExport.js';
 import { compararConHistorico, filtrarPorEmpresa, LABEL_BANCO } from '../lib/kpis.js';
 import { PanelKPIs, CorridaCabecera, LineaBanco, ChipEstado, tarjetaCorridaStyle } from '../components/SeguimientoUI.jsx';
+import DescargasCorrida from '../components/DescargasCorrida.jsx';
+import { useEstadoPersistente } from '../lib/useEstadoPersistente.js';
 
 const COLOR_BANCO = { produbanco: 'var(--bank-produbanco)', pichincha: 'var(--bank-pichincha)', guayaquil: 'var(--bank-guayaquil)' };
 
@@ -36,13 +38,18 @@ export default function OperadorDashboard({ perfil, onLogout }) {
   const dd = String(hoy.getDate()).padStart(2, '0');
   const yyyy = String(hoy.getFullYear());
 
-  const [vista, setVista] = useState('generar');
+  // Todo lo que la persona va haciendo se recuerda en la pestaña: si la pantalla se recarga o se vuelve a montar
+  // (por ejemplo al cambiar de pestaña y regresar), el proceso sigue donde estaba.
+  const idUsuario = perfil?.id || perfil?.nombre || 'operador';
+  const k = (nombre) => `nomina:${idUsuario}:op:${nombre}`;
 
-  const [tipo, setTipo] = useState('finiquito');
+  const [vista, setVista] = useEstadoPersistente(k('vista'), 'generar');
+
+  const [tipo, setTipo] = useEstadoPersistente(k('tipo'), 'finiquito');
   // Empresas que este usuario puede procesar (null = cargando). Las asigna el Admin en la base.
   const [misEmpresas, setMisEmpresas] = useState(null);
   // Valor del selector: una clave de EMPRESAS, o 'ambas' (Equinox + Medeport juntas).
-  const [empresa, setEmpresa] = useState('');
+  const [empresa, setEmpresa] = useEstadoPersistente(k('empresa'), '');
   const puedeAmbas = !!misEmpresas && EMPRESAS_AMBAS.every((k) => misEmpresas.includes(k));
   const objetivo = empresa === AMBAS ? EMPRESAS_AMBAS : empresa ? [empresa] : [];
 
@@ -52,17 +59,19 @@ export default function OperadorDashboard({ perfil, onLogout }) {
   const [procesando, setProcesando] = useState(false);
   const [errorGeneral, setErrorGeneral] = useState('');
   // { bloques: [{empresa, resultado, ...}], errores, advertencias, otrasEmpresas }
-  const [resultado, setResultado] = useState(null);
+  const [resultado, setResultado] = useEstadoPersistente(k('resultado'), null);
 
   const [finalizando, setFinalizando] = useState(false);
   // Contexto definitivo por empresa (fecha, consecutivo de Guayaquil) — existe SOLO después de finalizar.
-  const [finales, setFinales] = useState({});
+  const [finales, setFinales] = useEstadoPersistente(k('finales'), {});
 
   const [historial, setHistorial] = useState([]);
-  const [previaAbierta, setPreviaAbierta] = useState({});
+  const [miId, setMiId] = useState(null);
+  const [previaAbierta, setPreviaAbierta] = useEstadoPersistente(k('previa'), {});
 
   useEffect(() => {
     getHistorialCorridas(500).then(setHistorial);
+    getMiId().then(setMiId);
     getMisEmpresas().then((lista) => {
       const validas = lista.filter((k) => EMPRESAS_KEYS.includes(k));
       setMisEmpresas(validas);
@@ -82,6 +91,13 @@ export default function OperadorDashboard({ perfil, onLogout }) {
     setFinales({});
     setPreviaAbierta({});
     setErrorGeneral('');
+  }
+
+  // Empezar de cero: borra el proceso que quedó en pantalla (ya registrado en el historial) y los archivos elegidos.
+  function nuevoProceso() {
+    limpiarResultado();
+    setDataMadreFile(null);
+    setPagoFile(null);
   }
 
   function handleEmpresaChange(key) {
@@ -457,7 +473,7 @@ export default function OperadorDashboard({ perfil, onLogout }) {
                     {fctx && (
                       <div style={{ display: 'flex', gap: 10, marginTop: 12, flexWrap: 'wrap' }}>
                         <button onClick={() => descargarPdf(bloque)} style={btnGhost}>
-                          Descargar resumen PDF{variasEmpresas ? ` · ${EMPRESAS[bloque.empresa].label}` : ''}
+                          Descargar resumen{variasEmpresas ? ` · ${EMPRESAS[bloque.empresa].label}` : ''}
                         </button>
                         {!detalleJunto && (
                           <button onClick={() => descargarDetalle(bloque)} style={btnGhost}>
@@ -475,7 +491,10 @@ export default function OperadorDashboard({ perfil, onLogout }) {
                   <button onClick={descargarDetalleJunto} style={btnGhost}>Descargar detalle (Excel) · Equinox + Medeport</button>
                 )}
                 {finalizado ? (
-                  <button disabled style={{ ...btnPrimary, opacity: 0.7, cursor: 'default' }}>Proceso finalizado ✓</button>
+                  <>
+                    <button disabled style={{ ...btnPrimary, opacity: 0.7, cursor: 'default' }}>Proceso finalizado ✓</button>
+                    <button onClick={nuevoProceso} style={btnGhost}>Nuevo proceso</button>
+                  </>
                 ) : (
                   <button onClick={handleFinalizar} disabled={finalizando} style={btnPrimary}>
                     {finalizando ? 'Finalizando…' : algunoFinalizado ? 'Finalizar lo pendiente' : 'Finalizar proceso'}
@@ -489,7 +508,7 @@ export default function OperadorDashboard({ perfil, onLogout }) {
               )}
               {algunoFinalizado && (
                 <p style={{ fontSize: 12.5, color: 'var(--ok)', marginTop: 10 }}>
-                  Registrado en el historial — el Admin ya lo puede ver.
+                  Registrado en el historial — el Admin ya lo puede ver. Si sales de esta pantalla, puedes volver a descargar todo desde «Dashboard de seguimiento» → «Historial de corridas».
                   {bloquesConDatos.filter((b) => finales[b.empresa]?.secuencia != null).map((b) =>
                     ` Consecutivo Guayaquil de hoy${variasEmpresas ? ` (${EMPRESAS[b.empresa].label})` : ''}: ${String(finales[b.empresa].secuencia).padStart(2, '0')}.`
                   )}
@@ -504,14 +523,14 @@ export default function OperadorDashboard({ perfil, onLogout }) {
         <>
           <h1 style={pageTitle}>Dashboard de seguimiento</h1>
           <p style={pageSubtitle}>Solo lectura — acá no se puede editar ni anular nada, es para que tengas visibilidad de todo lo que se ha corrido.</p>
-          <VistaSeguimiento corridas={historial} empresasPermitidas={misEmpresas || []} />
+          <VistaSeguimiento corridas={historial} empresasPermitidas={misEmpresas || []} miId={miId} />
         </>
       )}
     </AppShell>
   );
 }
 
-function VistaSeguimiento({ corridas: todas, empresasPermitidas }) {
+function VistaSeguimiento({ corridas: todas, empresasPermitidas, miId }) {
   const [filtroEmpresa, setFiltroEmpresa] = useState('consolidado');
   const [busqueda, setBusqueda] = useState('');
   const [filtroTipo, setFiltroTipo] = useState('todos');
@@ -580,13 +599,13 @@ function VistaSeguimiento({ corridas: todas, empresasPermitidas }) {
       {filtradas.length === 0 ? (
         <p style={{ color: 'var(--muted)', fontSize: 14 }}>Nada coincide con ese filtro.</p>
       ) : (
-        filtradas.map((c) => <FilaSeguimiento key={c.id} corrida={c} />)
+        filtradas.map((c) => <FilaSeguimiento key={c.id} corrida={c} miId={miId} soloBanco={filtroBanco === 'todos' ? null : filtroBanco} />)
       )}
     </div>
   );
 }
 
-function FilaSeguimiento({ corrida: c }) {
+function FilaSeguimiento({ corrida: c, miId, soloBanco }) {
   const anulada = c.anulada;
   return (
     <div style={{ ...tarjetaCorridaStyle, opacity: anulada ? 0.7 : 1 }}>
@@ -595,13 +614,18 @@ function FilaSeguimiento({ corrida: c }) {
       {anulada && <div style={{ fontSize: 13.5, color: 'var(--err)', marginTop: 8 }}>{c.notaAnulacion}</div>}
 
       <div style={{ marginTop: 14, display: 'flex', flexDirection: 'column', gap: 10 }}>
-        {Object.entries(c.detalle_bancos || {}).map(([banco, info]) => (
-          <LineaBanco key={banco} banco={banco} info={info} subido={c.subidoBanco?.[banco]} />
-        ))}
+        {Object.entries(c.detalle_bancos || {})
+          .filter(([banco]) => !soloBanco || banco === soloBanco)
+          .map(([banco, info]) => (
+            <LineaBanco key={banco} banco={banco} info={info} subido={c.subidoBanco?.[banco]} />
+          ))}
         {c.registros_con_error > 0 && (
           <ChipEstado tipo="error">{c.registros_con_error} error(es)</ChipEstado>
         )}
       </div>
+
+      {/* Solo quien generó la corrida puede volver a bajar sus archivos (así lo exige la base). */}
+      {!anulada && miId && c.generado_por === miId && <DescargasCorrida corrida={c} soloBanco={soloBanco} />}
     </div>
   );
 }

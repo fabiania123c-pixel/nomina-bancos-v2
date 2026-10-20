@@ -3,7 +3,7 @@ import ExcelJS from 'exceljs';
 const LABEL_BANCO = { produbanco: 'PRODUBANCO', pichincha: 'BANCO PICHINCHA', guayaquil: 'BANCO DE GUAYAQUIL' };
 
 // Columnas en el mismo orden que el archivo de referencia (NETOS_FINIQUITOS).
-function columnasDetalle(incluirBaja, conEmpresa) {
+function columnasDetalle(conEmpresa) {
   const cols = [
     ...(conEmpresa ? [{ header: 'EMPRESA', key: 'empresa', width: 14 }] : []),
     { header: 'COD. SAP', key: 'codigoSap', width: 11 },
@@ -15,17 +15,7 @@ function columnasDetalle(incluirBaja, conEmpresa) {
     { header: 'TIPO DE CUENTA', key: 'tipoCuenta', width: 14 },
     { header: 'NUMERO CELULAR', key: 'celular', width: 16 },
   ];
-  if (incluirBaja) cols.push({ header: 'BAJA', key: 'baja', width: 13 });
   return cols;
-}
-
-function normalizarFecha(valor) {
-  if (!valor) return null;
-  const d = valor instanceof Date ? valor : new Date(valor);
-  if (isNaN(d.getTime())) return null;
-  // Normalizada a medianoche UTC para que Excel no la corra un día al
-  // mostrarla en una zona con offset negativo (Ecuador).
-  return new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate()));
 }
 
 const BORDE_SUAVE = {
@@ -46,14 +36,14 @@ const BORDE_SUAVE = {
  *  - { bloques: [{ empresa, resultado }] } varias empresas en un solo Excel: agrega la columna
  *    EMPRESA y lista primero todo lo de la primera empresa, luego la siguiente.
  *
- * @param {string} tipo - la columna BAJA solo se incluye para 'finiquito'.
+ * Al final del libro se agrega el resumen: subtotal por banco y total acumulado.
+ * @param {string} tipo - (se conserva por compatibilidad; ya no cambia las columnas)
  */
 export async function armarDetalleExcel({ resultado, bloques, tipo }) {
-  const incluirBaja = tipo === 'finiquito';
   const conEmpresa = Array.isArray(bloques) && bloques.length > 0;
   const wb = new ExcelJS.Workbook();
   const ws = wb.addWorksheet('Detalle');
-  ws.columns = columnasDetalle(incluirBaja, conEmpresa);
+  ws.columns = columnasDetalle(conEmpresa);
 
   // Columnas que deben quedar como texto (nunca número) para no perder
   // ceros a la izquierda: cédula, cuenta, celular y código SAP.
@@ -61,10 +51,12 @@ export async function armarDetalleExcel({ resultado, bloques, tipo }) {
     ws.getColumn(key).numFmt = '@';
   });
   ws.getColumn('valor').numFmt = '"$"#,##0.00';
-  if (incluirBaja) ws.getColumn('baja').numFmt = 'dd/mm/yyyy';
 
   const grupos = conEmpresa ? bloques : [{ empresa: null, resultado }];
+  const subtotales = { produbanco: { n: 0, total: 0 }, pichincha: { n: 0, total: 0 }, guayaquil: { n: 0, total: 0 } };
+  const porEmpresa = [];
   for (const g of grupos) {
+    const acumEmpresa = { n: 0, total: 0 };
     for (const banco of ['produbanco', 'pichincha', 'guayaquil']) {
       for (const r of g.resultado?.[banco] || []) {
         const fila = {
@@ -78,11 +70,16 @@ export async function armarDetalleExcel({ resultado, bloques, tipo }) {
           celular: r.celular || '',
         };
         if (conEmpresa) fila.empresa = g.empresa;
-        if (incluirBaja) fila.baja = normalizarFecha(r.baja);
         ws.addRow(fila);
+        subtotales[banco].n += 1;
+        subtotales[banco].total += fila.valor;
+        acumEmpresa.n += 1;
+        acumEmpresa.total += fila.valor;
       }
     }
+    if (conEmpresa) porEmpresa.push({ empresa: g.empresa, ...acumEmpresa });
   }
+  const ultimaFilaDatos = ws.rowCount;
 
   // Encabezado: negrita, blanco sobre navy, bordeado y centrado.
   const header = ws.getRow(1);
@@ -102,8 +99,64 @@ export async function armarDetalleExcel({ resultado, bloques, tipo }) {
     });
   });
 
+  // ── Resumen al final: subtotal por banco y total acumulado (separado de los datos) ──
+  const r2 = (n) => Math.round(n * 100) / 100;
+  const colNombre = conEmpresa ? 3 : 2; // NOMBRE
+  const colCedula = colNombre + 1; // se usa para el Nº de registros
+  const colValor = colNombre + 2; // VALOR
+  const estiloFila = (row, { negrita = false, fondo = null } = {}) => {
+    row.eachCell({ includeEmpty: true }, (cell, col) => {
+      if (col > ws.columns.length) return;
+      cell.font = { bold: negrita };
+      if (fondo) cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: fondo } };
+      cell.border = BORDE_SUAVE;
+    });
+  };
+  const agregarLineaResumen = (etiqueta, n, total, opciones) => {
+    const fila = ws.addRow({});
+    fila.getCell(colNombre).value = etiqueta;
+    fila.getCell(colCedula).value = n === null ? '' : `${n} reg.`;
+    fila.getCell(colValor).value = r2(total);
+    fila.getCell(colValor).numFmt = '"$"#,##0.00';
+    estiloFila(fila, opciones);
+    return fila;
+  };
+
+  ws.addRow({}); // línea en blanco para separar
+  const titulo = ws.addRow({});
+  titulo.getCell(colNombre).value = 'SUBTOTAL POR BANCO';
+  titulo.eachCell({ includeEmpty: true }, (cell, col) => {
+    if (col > ws.columns.length) return;
+    cell.font = { bold: true, color: { argb: 'FFFFFFFF' } };
+    cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF10193A' } };
+  });
+
+  let totalN = 0;
+  let totalValor = 0;
+  for (const banco of ['produbanco', 'pichincha', 'guayaquil']) {
+    const sub = subtotales[banco];
+    if (sub.n === 0) continue;
+    agregarLineaResumen(LABEL_BANCO[banco], sub.n, sub.total);
+    totalN += sub.n;
+    totalValor += sub.total;
+  }
+  agregarLineaResumen('TOTAL ACUMULADO', totalN, totalValor, { negrita: true, fondo: 'FFEEF1FB' });
+
+  if (conEmpresa && porEmpresa.length > 1) {
+    ws.addRow({});
+    const tituloEmp = ws.addRow({});
+    tituloEmp.getCell(colNombre).value = 'SUBTOTAL POR EMPRESA';
+    tituloEmp.eachCell({ includeEmpty: true }, (cell, col) => {
+      if (col > ws.columns.length) return;
+      cell.font = { bold: true, color: { argb: 'FFFFFFFF' } };
+      cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF10193A' } };
+    });
+    for (const e of porEmpresa) agregarLineaResumen(String(e.empresa).toUpperCase(), e.n, e.total);
+  }
+
   ws.views = [{ state: 'frozen', ySplit: 1 }];
-  ws.autoFilter = { from: { row: 1, column: 1 }, to: { row: 1, column: ws.columns.length } };
+  // El filtro cubre solo las filas de datos (no el resumen del final).
+  ws.autoFilter = { from: { row: 1, column: 1 }, to: { row: Math.max(1, ultimaFilaDatos), column: ws.columns.length } };
 
   return wb;
 }

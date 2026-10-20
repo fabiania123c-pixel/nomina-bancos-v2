@@ -131,25 +131,37 @@ export async function getArchivosCorrida(corridaId) {
 
 /**
  * Marca que los archivos de un banco de esta corrida ya se subieron al portal
- * de cash management. Solo Admin (lo hace cumplir la política de la tabla).
- * Verifica que de verdad se actualizó una fila: si la política bloquea el
- * UPDATE, Supabase NO da error, solo devuelve 0 filas.
+ * de cash management. Solo Admin.
+ *
+ * Se guarda con la función del servidor `marcar_subido_banco` (verifica que sea
+ * Admin y toma el nombre de quien confirma desde su perfil). Después se LEE la fila
+ * de nuevo: solo si de verdad quedó guardada se devuelve la confirmación; si no,
+ * se lanza un error y la pantalla NO muestra el banco como subido.
+ * @returns {{at: string, por: string}} lo que quedó guardado en la base
  */
-export async function marcarSubidoBanco(corridaId, banco, nombreQuienConfirma) {
+export async function marcarSubidoBanco(corridaId, banco) {
   const cols = COLUMNAS_SUBIDO[banco];
   if (!cols) throw new Error(`Banco "${banco}" no reconocido.`);
 
-  const { data, error } = await supabase
-    .from('corridas')
-    .update({
-      [cols.at]: new Date().toISOString(),
-      [cols.por]: nombreQuienConfirma,
-    })
-    .eq('id', corridaId)
-    .select('id');
-
-  if (error) throw error;
-  if (!data || data.length === 0) {
-    throw new Error('No se pudo guardar la confirmación (sin permiso o la corrida ya no existe).');
+  const { data, error } = await supabase.rpc('marcar_subido_banco', { p_corrida: corridaId, p_banco: banco });
+  if (error) {
+    if (/marcar_subido_banco/.test(error.message || '') && /(could not find|does not exist|not find the function)/i.test(error.message || '')) {
+      throw new Error('Falta correr el SQL "fix_confirmar_subido.sql" en Supabase (crea la función que guarda la confirmación).');
+    }
+    throw new Error(error.message || 'No se pudo confirmar la subida.');
   }
+  const res = Array.isArray(data) ? data[0] : data;
+  if (!res || !res.at) throw new Error('El servidor no devolvió la confirmación.');
+
+  // Lectura de control: ¿quedó realmente guardado?
+  const { data: fila, error: errLeer } = await supabase
+    .from('corridas')
+    .select(`${cols.at}, ${cols.por}`)
+    .eq('id', corridaId)
+    .single();
+  if (errLeer) throw new Error(errLeer.message || 'No se pudo verificar la confirmación.');
+  if (!fila || !fila[cols.at]) {
+    throw new Error('La confirmación no quedó guardada en la base. No se marcó como subido; avísale a Fabián.');
+  }
+  return { at: fila[cols.at], por: fila[cols.por] };
 }

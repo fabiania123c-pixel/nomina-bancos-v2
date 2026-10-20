@@ -6,6 +6,14 @@ const COLUMNAS_SUBIDO = {
   guayaquil: { at: 'subido_guayaquil_at', por: 'subido_guayaquil_por' },
 };
 
+/** Id del usuario con sesión iniciada (null si no hay). */
+export async function getMiId() {
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  return user ? user.id : null;
+}
+
 export async function getPerfilActual() {
   const {
     data: { user },

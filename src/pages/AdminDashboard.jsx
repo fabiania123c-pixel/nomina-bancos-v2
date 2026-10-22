@@ -12,8 +12,15 @@ import { useEstadoPersistente } from '../lib/useEstadoPersistente.js';
 import { useDescargados, estiloDescarga, textoDescarga } from '../lib/descargados.js';
 
 
+// Una corrida está "pendiente" mientras algún banco no se haya confirmado como subido.
+const esPendiente = (c) => c.finalizado && !c.anulada && Object.keys(c.detalle_bancos || {}).some((banco) => !c.subidoBanco?.[banco]);
+
 export default function AdminDashboard({ perfil, onLogout }) {
   const [corridas, setCorridas] = useState([]);
+  // Ids de las corridas que estaban pendientes al abrir la pantalla. "Procesos finalizados" muestra solo esas:
+  // lo que ya está 100% subido a los bancos no aparece (queda en el Dashboard de seguimiento), y lo que se completa
+  // durante esta sesión se queda a la vista hasta que se recargue, para ver cómo quedó en verde.
+  const [idsPendientes, setIdsPendientes] = useState(null);
   const [cargando, setCargando] = useState(true);
   // La pantalla en la que está y el filtro de empresa se recuerdan: si la página se recarga o se vuelve a montar,
   // la persona sigue donde estaba (no regresa al inicio).
@@ -25,16 +32,16 @@ export default function AdminDashboard({ perfil, onLogout }) {
   useEffect(() => {
     getHistorialCorridas(500).then((data) => {
       setCorridas(data);
+      setIdsPendientes(new Set(data.filter(esPendiente).map((c) => c.id)));
       setCargando(false);
     });
   }, []);
 
   // "Por revisar" = corridas finalizadas, no anuladas, con al menos un banco todavía sin confirmar como subido.
   // Se va apagando solo a medida que se confirma la subida de cada banco.
-  const recientes = corridas.filter(
-    (c) => c.finalizado && !c.anulada && Object.keys(c.detalle_bancos || {}).some((banco) => !c.subidoBanco?.[banco])
-  );
+  const recientes = corridas.filter(esPendiente);
   const corridasVista = filtrarPorEmpresa(corridas, filtroEmpresa);
+  const corridasProcesos = corridasVista.filter((c) => idsPendientes?.has(c.id));
 
   // Cuando se confirma la subida de un banco, se actualiza la lista en memoria para que el contador baje al instante.
   function alConfirmarSubido(corridaId, banco, confirmado) {
@@ -76,7 +83,7 @@ export default function AdminDashboard({ perfil, onLogout }) {
         <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap', marginTop: 28 }}>
           <BoxHome
             titulo="Procesos finalizados"
-            descripcion="Historial de corridas generadas — revisa, confirma la subida a cada banco, y descarga el resumen en PDF de cualquiera."
+            descripcion="Corridas pendientes de subir al banco — descarga los archivos y confirma la subida. Al completarse todos los bancos, salen de aquí y quedan en el Dashboard."
             badge={recientes.length > 0 ? recientes.length : null}
             onClick={() => setVista('procesos')}
           />
@@ -88,7 +95,7 @@ export default function AdminDashboard({ perfil, onLogout }) {
         </div>
       )}
 
-      {!cargando && vista === 'procesos' && <VistaProcesos corridas={corridasVista} perfil={perfil} idUsuario={idUsuario} alConfirmarSubido={alConfirmarSubido} />}
+      {!cargando && vista === 'procesos' && <VistaProcesos corridas={corridasProcesos} perfil={perfil} idUsuario={idUsuario} alConfirmarSubido={alConfirmarSubido} />}
       {!cargando && vista === 'kpis' && <VistaKPIs corridas={corridasVista} mostrarPorEmpresa={filtroEmpresa === 'consolidado'} />}
     </AppShell>
   );
@@ -117,9 +124,9 @@ function VistaProcesos({ corridas, perfil, idUsuario, alConfirmarSubido }) {
         <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="var(--muted-2)" strokeWidth="1.5" style={{ margin: '0 auto' }}>
           <path d="M3 8l3-5h12l3 5M3 8v10a1 1 0 0 0 1 1h16a1 1 0 0 0 1-1V8M3 8h6a1 1 0 0 1 1 1v1a1 1 0 0 0 1 1h2a1 1 0 0 0 1-1V9a1 1 0 0 1 1-1h6" strokeLinecap="round" strokeLinejoin="round" />
         </svg>
-        <p style={{ fontWeight: 600, fontSize: 14, margin: '10px 0 2px' }}>Todavía no hay nada aquí</p>
+        <p style={{ fontWeight: 600, fontSize: 14, margin: '10px 0 2px' }}>No hay procesos pendientes</p>
         <p style={{ fontSize: 12.5, color: 'var(--muted)', margin: 0 }}>
-          En cuanto se finalice una corrida de esta selección, va a aparecer en esta lista.
+          Cuando una operadora finalice una corrida, aparece aquí. Al confirmar la subida a todos sus bancos, sale de esta lista y queda en el Dashboard de seguimiento.
         </p>
       </div>
     );

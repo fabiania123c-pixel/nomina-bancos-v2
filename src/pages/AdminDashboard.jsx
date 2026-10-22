@@ -225,7 +225,12 @@ function CorridaRow({ corrida: c, perfil, soloBanco, alConfirmarSubido }) {
       }
       const ctx = { ...archivos.ctx, empresa, tipo: c.tipo, secuencia: c.secuencia_guayaquil ?? archivos.ctx?.secuencia ?? null };
       const content = buildFileContent(banco, archivos.filas_por_banco[banco], ctx);
-      const filename = nombreArchivoBanco(banco, { ...ctx, ...fechaDescarga() });
+      // Guayaquil: el nombre lleva la fecha y el consecutivo del día en que se finalizó la corrida (van juntos, así
+      // nunca se repite un nombre). Los demás bancos llevan la fecha del día de descarga.
+      const filename = nombreArchivoBanco(
+        banco,
+        banco === 'guayaquil' ? { ...ctx, dd: ctx.dd || ddF, mm: ctx.mm || mmF, yyyy: ctx.yyyy || yyyyF } : { ...ctx, ...fechaDescarga() }
+      );
       const blob = new Blob([content], { type: 'text/plain;charset=utf-8' });
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');

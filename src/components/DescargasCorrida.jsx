@@ -58,7 +58,12 @@ export default function DescargasCorrida({ corrida: c, soloBanco = null }) {
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = url;
-      a.download = nombreArchivoBanco(banco, { ...ctx, ...fechaDescarga() });
+      // Guayaquil: el nombre lleva la fecha y el consecutivo del día en que se finalizó la corrida (van juntos, así
+      // nunca se repite un nombre). Los demás bancos llevan la fecha del día de descarga.
+      a.download = nombreArchivoBanco(
+        banco,
+        banco === 'guayaquil' ? { ...ctx, dd: ctx.dd || dd, mm: ctx.mm || mm, yyyy: ctx.yyyy || yyyy } : { ...ctx, ...fechaDescarga() }
+      );
       document.body.appendChild(a);
       a.click();
       document.body.removeChild(a);

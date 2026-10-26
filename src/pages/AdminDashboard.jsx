@@ -10,6 +10,7 @@ import { EMPRESAS, EMPRESAS_KEYS } from '../lib/empresas.js';
 import { nombreArchivoBanco, nombrePdfResumen, nombreDetalleExcel } from '../lib/nombresArchivo.js';
 import { useEstadoPersistente } from '../lib/useEstadoPersistente.js';
 import { useDescargados, estiloDescarga, textoDescarga } from '../lib/descargados.js';
+import { useConsecutivoGuayaquil, sufijoConsecutivo } from '../lib/useConsecutivoGuayaquil.js';
 
 
 // Una corrida está "pendiente" mientras algún banco no se haya confirmado como subido.
@@ -182,6 +183,7 @@ function VistaProcesos({ corridas, perfil, idUsuario, alConfirmarSubido }) {
 
 function CorridaRow({ corrida: c, perfil, soloBanco, alConfirmarSubido }) {
   const { hecho, marcar } = useDescargados(c.id);
+  const { consecutivo, obtener: obtenerConsecutivo } = useConsecutivoGuayaquil(c);
   const [descargando, setDescargando] = useState(null);
   const [descargandoDetalle, setDescargandoDetalle] = useState(false);
   const [error, setError] = useState('');
@@ -230,14 +232,17 @@ function CorridaRow({ corrida: c, perfil, soloBanco, alConfirmarSubido }) {
         setError('No se encontró el archivo guardado para esta corrida.');
         return;
       }
-      const ctx = { ...archivos.ctx, empresa, tipo: c.tipo, secuencia: c.secuencia_guayaquil ?? archivos.ctx?.secuencia ?? null };
+      // Guayaquil: el consecutivo se asigna AHORA (el primero que se descarga en el día es el 01) y queda fijo para esta
+      // corrida; el nombre lleva el día en que se asignó. Los demás bancos llevan la fecha del día de descarga.
+      let ctx = { ...archivos.ctx, empresa, tipo: c.tipo, secuencia: null };
+      let fechaNombre = fechaDescarga();
+      if (banco === 'guayaquil') {
+        const k = await obtenerConsecutivo();
+        ctx = { ...ctx, secuencia: k.secuencia };
+        fechaNombre = { dd: k.dd, mm: k.mm, yyyy: k.yyyy };
+      }
       const content = buildFileContent(banco, archivos.filas_por_banco[banco], ctx);
-      // Guayaquil: el nombre lleva la fecha y el consecutivo del día en que se finalizó la corrida (van juntos, así
-      // nunca se repite un nombre). Los demás bancos llevan la fecha del día de descarga.
-      const filename = nombreArchivoBanco(
-        banco,
-        banco === 'guayaquil' ? { ...ctx, dd: ctx.dd || ddF, mm: ctx.mm || mmF, yyyy: ctx.yyyy || yyyyF } : { ...ctx, ...fechaDescarga() }
-      );
+      const filename = nombreArchivoBanco(banco, { ...ctx, ...fechaNombre });
       const blob = new Blob([content], { type: 'text/plain;charset=utf-8' });
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
@@ -326,7 +331,7 @@ function CorridaRow({ corrida: c, perfil, soloBanco, alConfirmarSubido }) {
         <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', justifyContent: 'flex-end' }}>
           {bancosVisibles.map((banco) => (
             <button key={banco} onClick={() => descargarTxt(banco)} disabled={descargando === banco} style={estiloDescarga(btnGhost, hecho(`txt:${banco}`))}>
-              {descargando === banco ? '…' : textoDescarga(`${LABEL_BANCO[banco]} · .txt`, hecho(`txt:${banco}`))}
+              {descargando === banco ? '…' : textoDescarga(`${LABEL_BANCO[banco]} · .txt${banco === 'guayaquil' ? sufijoConsecutivo(consecutivo) : ''}`, hecho(`txt:${banco}`))}
             </button>
           ))}
           <button onClick={descargarPdf} style={estiloDescarga(btnGhost, hecho('resumen'))}>{textoDescarga('Descargar resumen', hecho('resumen'))}</button>

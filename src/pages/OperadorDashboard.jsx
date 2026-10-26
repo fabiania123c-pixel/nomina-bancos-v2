@@ -62,7 +62,7 @@ export default function OperadorDashboard({ perfil, onLogout }) {
   const [resultado, setResultado] = useEstadoPersistente(k('resultado'), null);
 
   const [finalizando, setFinalizando] = useState(false);
-  // Contexto definitivo por empresa (fecha, consecutivo de Guayaquil) — existe SOLO después de finalizar.
+  // Contexto definitivo por empresa (fecha del proceso, id de la corrida) — existe SOLO después de finalizar.
   const [finales, setFinales] = useEstadoPersistente(k('finales'), {});
 
   const [historial, setHistorial] = useState([]);
@@ -181,21 +181,29 @@ export default function OperadorDashboard({ perfil, onLogout }) {
   const variasEmpresas = objetivo.length > 1;
   const detalleJunto = bloquesConDatos.length > 1; // dos empresas con datos -> un solo Excel de detalle
 
-  // Las descargas solo existen después de finalizar: usan finales[empresa] (con el consecutivo real).
+  // Las descargas solo existen después de finalizar: usan finales[empresa].
   function descargarBanco(bloque, bancoKey) {
     const fctx = finales[bloque.empresa];
     if (!fctx) return;
-    const content = buildFileContent(bancoKey, bloque.resultado[bancoKey], fctx);
-    const filename = nombreArchivoBanco(bancoKey, { ...fctx, tipo });
-    const blob = new Blob([content], { type: 'text/plain;charset=utf-8' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = filename;
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
-    URL.revokeObjectURL(url);
+    setErrorGeneral('');
+    try {
+      // Guayaquil: la operadora baja una COPIA sin consecutivo (nunca toca el contador del banco). El archivo con el
+      // número oficial, el que se sube al banco, lo baja el Admin.
+      const content = buildFileContent(bancoKey, bloque.resultado[bancoKey], fctx);
+      const filename = nombreArchivoBanco(bancoKey, { ...fctx, tipo, secuencia: null });
+      const blob = new Blob([content], { type: 'text/plain;charset=utf-8' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = filename;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+    } catch (err) {
+      console.error(err);
+      setErrorGeneral('No se pudo descargar el archivo: ' + err.message);
+    }
   }
 
   function descargarPdf(bloque) {
@@ -255,7 +263,7 @@ export default function OperadorDashboard({ perfil, onLogout }) {
       for (const bloque of bloquesConDatos) {
         if (finales[bloque.empresa]) continue;
         ultimo = bloque;
-        // La fecha se toma AHORA (no al abrir la pantalla) para que cuadre con el consecutivo del día.
+        // La fecha se toma AHORA (no al abrir la pantalla).
         const ahora = new Date();
         const y = String(ahora.getFullYear());
         const m = String(ahora.getMonth() + 1).padStart(2, '0');
@@ -271,7 +279,7 @@ export default function OperadorDashboard({ perfil, onLogout }) {
           filasPorBanco: bloque.resultado,
           ctx,
         });
-        setFinales((prev) => ({ ...prev, [bloque.empresa]: { ...ctx, empresa: bloque.empresa, secuencia: corrida.secuencia_guayaquil ?? null } }));
+        setFinales((prev) => ({ ...prev, [bloque.empresa]: { ...ctx, empresa: bloque.empresa, corridaId: corrida.id, secuencia: corrida.secuencia_guayaquil ?? null } }));
       }
       getHistorialCorridas(500).then(setHistorial);
     } catch (err) {
@@ -446,8 +454,8 @@ export default function OperadorDashboard({ perfil, onLogout }) {
                                 {previaAbierta[kPrevia] ? 'Ocultar vista previa' : 'Vista previa'}
                               </button>
                               {fctx && (
-                                <button onClick={() => descargarBanco(bloque, banco)} style={btnGhost} title={nombreArchivoBanco(banco, { ...fctx, tipo })}>
-                                  Descargar .txt
+                                <button onClick={() => descargarBanco(bloque, banco)} style={btnGhost} title={nombreArchivoBanco(banco, { ...fctx, tipo, secuencia: null })}>
+                                  Descargar .txt{banco === 'guayaquil' ? ' (sin consecutivo)' : ''}
                                 </button>
                               )}
                             </div>
@@ -509,9 +517,6 @@ export default function OperadorDashboard({ perfil, onLogout }) {
               {algunoFinalizado && (
                 <p style={{ fontSize: 12.5, color: 'var(--ok)', marginTop: 10 }}>
                   Registrado en el historial — el Admin ya lo puede ver. Si sales de esta pantalla, puedes volver a descargar todo desde «Dashboard de seguimiento» → «Historial de corridas».
-                  {bloquesConDatos.filter((b) => finales[b.empresa]?.secuencia != null).map((b) =>
-                    ` Consecutivo Guayaquil de hoy${variasEmpresas ? ` (${EMPRESAS[b.empresa].label})` : ''}: ${String(finales[b.empresa].secuencia).padStart(2, '0')}.`
-                  )}
                 </p>
               )}
             </Section>

@@ -52,18 +52,16 @@ export default function DescargasCorrida({ corrida: c, soloBanco = null }) {
         setError('No se encontró el archivo guardado para esta corrida.');
         return;
       }
-      const ctx = { ...archivos.ctx, empresa, tipo: c.tipo, secuencia: c.secuencia_guayaquil ?? archivos.ctx?.secuencia ?? null };
+      // Guayaquil: la operadora baja una COPIA sin consecutivo (nunca toca el contador). El archivo con el número
+      // oficial, el que se sube al banco, lo baja el Admin.
+      const ctx = { ...archivos.ctx, empresa, tipo: c.tipo, secuencia: null };
+      const fechaNombre = fechaDescarga();
       const content = buildFileContent(banco, archivos.filas_por_banco[banco], ctx);
       const blob = new Blob([content], { type: 'text/plain;charset=utf-8' });
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = url;
-      // Guayaquil: el nombre lleva la fecha y el consecutivo del día en que se finalizó la corrida (van juntos, así
-      // nunca se repite un nombre). Los demás bancos llevan la fecha del día de descarga.
-      a.download = nombreArchivoBanco(
-        banco,
-        banco === 'guayaquil' ? { ...ctx, dd: ctx.dd || dd, mm: ctx.mm || mm, yyyy: ctx.yyyy || yyyy } : { ...ctx, ...fechaDescarga() }
-      );
+      a.download = nombreArchivoBanco(banco, { ...ctx, ...fechaNombre });
       document.body.appendChild(a);
       a.click();
       document.body.removeChild(a);
@@ -105,7 +103,7 @@ export default function DescargasCorrida({ corrida: c, soloBanco = null }) {
       <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
         {bancos.map((banco) => (
           <button key={banco} onClick={() => descargarTxt(banco)} disabled={descargando === banco} style={estiloDescarga(btn, hecho(`txt:${banco}`))}>
-            {descargando === banco ? '…' : textoDescarga(`${LABEL_BANCO[banco]} · .txt`, hecho(`txt:${banco}`))}
+            {descargando === banco ? '…' : textoDescarga(`${LABEL_BANCO[banco]} · .txt${banco === 'guayaquil' ? ' (sin consecutivo)' : ''}`, hecho(`txt:${banco}`))}
           </button>
         ))}
         <button onClick={descargarPdf} style={estiloDescarga(btn, hecho('resumen'))}>{textoDescarga('Descargar resumen', hecho('resumen'))}</button>

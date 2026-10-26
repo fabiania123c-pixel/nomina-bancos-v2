@@ -1,5 +1,3 @@
-import { BANK_PROFILES } from './bankProfiles.js';
-
 const p2 = (n) => String(n).padStart(2, '0');
 
 // Estándar acordado con Víctor (Tesorería): fecha, banco, empresa y proceso se leen en el nombre.
@@ -29,7 +27,8 @@ const codTipo = (tipo) => CODIGO_TIPO[tipo] || '';
  * Nombre del .txt de cada banco.
  *   Produbanco -> MMDDAAAA PR _ <S|E|M> _ <LQ|PTS|JUB|TTB|RBT>   ej. 10162026PR_S_LQ.txt
  *   Pichincha  -> MMDDAAAA BP _ <S|E|M> _ <proceso>               ej. 10162026BP_E_PTS.txt
- *   Guayaquil  -> NCR AAAAMMDD HGS _ <consecutivo>                ej. NCR20261016HGS_01.txt
+ *   Guayaquil  -> NCR AAAAMMDD HGS _ <consecutivo>                ej. NCR20261016HGS_01.txt   (el que baja el Admin)
+ *   Guayaquil, copia de la operadora (sin consecutivo) -> BGY_MMDDAAAA_<S|E|M>_<proceso>_SIN_CONSECUTIVO.txt
  * ctx = { dd, mm, yyyy, empresa, tipo, secuencia }
  */
 export function nombreArchivoBanco(banco, ctx) {
@@ -41,8 +40,9 @@ export function nombreArchivoBanco(banco, ctx) {
   }
   if (banco === 'guayaquil') {
     if (ctx.secuencia != null) return ensureTxt(`NCR${yyyy}${mm}${dd}HGS_${p2(ctx.secuencia)}`);
-    // corridas viejas (antes del consecutivo): se conserva el nombre de siempre
-    return ensureTxt(BANK_PROFILES.guayaquil.filename(ctx));
+    // Sin consecutivo = copia de la operadora (no es el archivo que se sube al banco): el nombre lo dice claro.
+    const t = codTipo(ctx.tipo);
+    return ensureTxt(`BGY_${mm}${dd}${yyyy}_${letra(ctx.empresa)}${t ? `_${t}` : ''}_SIN_CONSECUTIVO`);
   }
   throw new Error(`Banco "${banco}" no reconocido.`);
 }

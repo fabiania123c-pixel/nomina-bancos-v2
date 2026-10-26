@@ -61,7 +61,7 @@ export async function getHistorialCorridas(limite = 50) {
   const { data, error } = await supabase
     .from('corridas')
     .select(
-      'id, tipo, empresa, secuencia_guayaquil, generado_por, fecha, detalle_bancos, registros_con_error, finalizado, finalizado_en, ' +
+      'id, tipo, empresa, secuencia_guayaquil, consecutivo_dia, generado_por, fecha, detalle_bancos, registros_con_error, finalizado, finalizado_en, ' +
         'subido_produbanco_at, subido_produbanco_por, subido_pichincha_at, subido_pichincha_por, subido_guayaquil_at, subido_guayaquil_por, ' +
         'profiles(nombre), corrida_anulaciones(nota, creado_en)'
     )
@@ -91,12 +91,12 @@ export async function getHistorialCorridas(limite = 50) {
 
 /**
  * Registra y finaliza una corrida en UN solo paso (función del servidor
- * `registrar_corrida`). Asigna el consecutivo de Guayaquil de forma atómica:
- * uno por empresa y por día, sin huecos ni repetidos.
+ * `registrar_corrida`). El consecutivo de Banco de Guayaquil NO se asigna aquí:
+ * se pide al descargar el .txt (ver asignarConsecutivoGuayaquil).
  *
  * Parámetros: tipo, empresa, detalleBancos, registrosConError, dia ('YYYY-MM-DD'),
  * filasPorBanco y ctx.
- * @returns la corrida creada (incluye secuencia_guayaquil si hubo Guayaquil)
+ * @returns la corrida creada
  */
 export async function registrarCorridaFinal({
   tipo,
@@ -121,6 +121,23 @@ export async function registrarCorridaFinal({
   const corrida = Array.isArray(data) ? data[0] : data;
   if (!corrida || !corrida.id) throw new Error('El servidor no devolvió la corrida registrada.');
   return corrida;
+}
+
+/**
+ * Pide el consecutivo de Banco de Guayaquil de una corrida (función del servidor
+ * `asignar_consecutivo_guayaquil`). Es uno solo por día, en el orden en que se descargan los archivos.
+ * Si la corrida ya tenía número, devuelve el mismo: un archivo descargado dos veces lleva el mismo nombre.
+ * @returns {{secuencia: number, dd: string, mm: string, yyyy: string}} número y día en que se asignó
+ */
+export async function asignarConsecutivoGuayaquil(corridaId) {
+  const { data, error } = await supabase.rpc('asignar_consecutivo_guayaquil', { p_corrida_id: corridaId });
+  if (error) throw error;
+  const c = Array.isArray(data) ? data[0] : data;
+  if (!c || c.secuencia_guayaquil == null || !c.consecutivo_dia) {
+    throw new Error('El servidor no devolvió el consecutivo de Guayaquil.');
+  }
+  const [yyyy, mm, dd] = String(c.consecutivo_dia).slice(0, 10).split('-');
+  return { secuencia: c.secuencia_guayaquil, dd, mm, yyyy };
 }
 
 export async function getArchivosCorrida(corridaId) {

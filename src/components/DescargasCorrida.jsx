@@ -1,18 +1,15 @@
 import { useState } from 'react';
 import { getArchivosCorrida } from '../lib/historial.js';
-import { buildFileContent } from '../lib/bankProfiles.js';
 import { descargarPdfResumen } from '../lib/pdf.js';
 import { descargarDetalleExcel } from '../lib/detalleExport.js';
 import { EMPRESAS } from '../lib/empresas.js';
-import { LABEL_BANCO } from '../lib/kpis.js';
-import { nombreArchivoBanco, nombrePdfResumen, nombreDetalleExcel } from '../lib/nombresArchivo.js';
+import { nombrePdfResumen, nombreDetalleExcel } from '../lib/nombresArchivo.js';
 import { useDescargados, estiloDescarga, textoDescarga } from '../lib/descargados.js';
 
-// Botones para volver a descargar los archivos de una corrida YA registrada
-// (.txt de cada banco, resumen PDF y detalle Excel). Lee lo guardado en el servidor,
-// así que sirve aunque la persona haya salido de la pantalla donde generó todo.
-// soloBanco: si el filtro de bancos está puesto, solo se muestra el .txt de ese banco.
-export default function DescargasCorrida({ corrida: c, soloBanco = null }) {
+// Botones para volver a descargar el resumen (PDF) y el detalle (Excel) de una corrida YA registrada.
+// Lee lo guardado en el servidor, así que sirve aunque la persona haya salido de la pantalla donde generó todo.
+// Los .txt de los bancos NO se bajan desde aquí: son solo del Admin.
+export default function DescargasCorrida({ corrida: c }) {
   const [descargando, setDescargando] = useState(null);
   const [error, setError] = useState('');
   const { hecho, marcar } = useDescargados(c.id);
@@ -28,8 +25,6 @@ export default function DescargasCorrida({ corrida: c, soloBanco = null }) {
     return { dd: String(h.getDate()).padStart(2, '0'), mm: String(h.getMonth() + 1).padStart(2, '0'), yyyy: String(h.getFullYear()) };
   };
 
-  const bancos = Object.keys(c.detalle_bancos || {}).filter((b) => !soloBanco || b === soloBanco);
-
   function descargarPdf() {
     descargarPdfResumen({
       tipo: c.tipo,
@@ -41,38 +36,6 @@ export default function DescargasCorrida({ corrida: c, soloBanco = null }) {
       filename: nombrePdfResumen({ empresa, tipo: c.tipo, ...fechaDescarga() }),
     });
     marcar('resumen');
-  }
-
-  async function descargarTxt(banco) {
-    setError('');
-    setDescargando(banco);
-    try {
-      const archivos = await getArchivosCorrida(c.id);
-      if (!archivos || !archivos.filas_por_banco[banco]?.length) {
-        setError('No se encontró el archivo guardado para esta corrida.');
-        return;
-      }
-      // Guayaquil: la operadora baja una COPIA sin consecutivo (nunca toca el contador). El archivo con el número
-      // oficial, el que se sube al banco, lo baja el Admin.
-      const ctx = { ...archivos.ctx, empresa, tipo: c.tipo, secuencia: null };
-      const fechaNombre = fechaDescarga();
-      const content = buildFileContent(banco, archivos.filas_por_banco[banco], ctx);
-      const blob = new Blob([content], { type: 'text/plain;charset=utf-8' });
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = nombreArchivoBanco(banco, { ...ctx, ...fechaNombre });
-      document.body.appendChild(a);
-      a.click();
-      document.body.removeChild(a);
-      URL.revokeObjectURL(url);
-      marcar(`txt:${banco}`);
-    } catch (err) {
-      console.error(err);
-      setError('No se pudo descargar: ' + err.message);
-    } finally {
-      setDescargando(null);
-    }
   }
 
   async function descargarDetalle() {
@@ -101,11 +64,6 @@ export default function DescargasCorrida({ corrida: c, soloBanco = null }) {
   return (
     <div style={{ marginTop: 14 }}>
       <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-        {bancos.map((banco) => (
-          <button key={banco} onClick={() => descargarTxt(banco)} disabled={descargando === banco} style={estiloDescarga(btn, hecho(`txt:${banco}`))}>
-            {descargando === banco ? '…' : textoDescarga(`${LABEL_BANCO[banco]} · .txt${banco === 'guayaquil' ? ' (sin consecutivo)' : ''}`, hecho(`txt:${banco}`))}
-          </button>
-        ))}
         <button onClick={descargarPdf} style={estiloDescarga(btn, hecho('resumen'))}>{textoDescarga('Descargar resumen', hecho('resumen'))}</button>
         <button onClick={descargarDetalle} disabled={descargando === 'detalle'} style={estiloDescarga(btn, hecho('detalle'))}>
           {descargando === 'detalle' ? '…' : textoDescarga('Descargar detalle', hecho('detalle'))}

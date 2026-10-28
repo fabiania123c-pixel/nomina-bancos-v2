@@ -5,7 +5,7 @@ import { cruzarVariasEmpresas } from '../lib/cruce.js';
 import { buildFileContent } from '../lib/bankProfiles.js';
 import { registrarCorridaFinal, getHistorialCorridas, getMisEmpresas, getMiId } from '../lib/historial.js';
 import { EMPRESAS, EMPRESAS_KEYS } from '../lib/empresas.js';
-import { nombreArchivoBanco, nombrePdfResumen, nombreDetalleExcel } from '../lib/nombresArchivo.js';
+import { nombrePdfResumen, nombreDetalleExcel } from '../lib/nombresArchivo.js';
 import { descargarPdfResumen } from '../lib/pdf.js';
 import { descargarDetalleExcel } from '../lib/detalleExport.js';
 import { compararConHistorico, filtrarPorEmpresa, LABEL_BANCO } from '../lib/kpis.js';
@@ -17,14 +17,14 @@ const COLOR_BANCO = { produbanco: 'var(--bank-produbanco)', pichincha: 'var(--ba
 
 const TIPOS = [
   { value: 'finiquito', label: 'Finiquitos' },
-  { value: 'prestamo', label: 'Préstamos' },
+  { value: 'nomina_regular', label: 'Rebotes' }, // en la base se guarda como 'nomina_regular'
   { value: 'jubilacion', label: 'Jubilación' },
   { value: 'teletrabajo', label: 'Teletrabajo' },
 ];
 
 const LABEL_ARCHIVO_PAGO = {
   finiquito: 'Archivo de finiquitos',
-  prestamo: 'Archivo de préstamos',
+  nomina_regular: 'Archivo de rebotes',
   jubilacion: 'Archivo de jubilación',
   teletrabajo: 'Archivo de teletrabajo',
 };
@@ -181,31 +181,7 @@ export default function OperadorDashboard({ perfil, onLogout }) {
   const variasEmpresas = objetivo.length > 1;
   const detalleJunto = bloquesConDatos.length > 1; // dos empresas con datos -> un solo Excel de detalle
 
-  // Las descargas solo existen después de finalizar: usan finales[empresa].
-  function descargarBanco(bloque, bancoKey) {
-    const fctx = finales[bloque.empresa];
-    if (!fctx) return;
-    setErrorGeneral('');
-    try {
-      // Guayaquil: la operadora baja una COPIA sin consecutivo (nunca toca el contador del banco). El archivo con el
-      // número oficial, el que se sube al banco, lo baja el Admin.
-      const content = buildFileContent(bancoKey, bloque.resultado[bancoKey], fctx);
-      const filename = nombreArchivoBanco(bancoKey, { ...fctx, tipo, secuencia: null });
-      const blob = new Blob([content], { type: 'text/plain;charset=utf-8' });
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = filename;
-      document.body.appendChild(a);
-      a.click();
-      document.body.removeChild(a);
-      URL.revokeObjectURL(url);
-    } catch (err) {
-      console.error(err);
-      setErrorGeneral('No se pudo descargar el archivo: ' + err.message);
-    }
-  }
-
+  // Las descargas (resumen y detalle) solo existen después de finalizar: usan finales[empresa]. Los .txt de los bancos los baja el Admin.
   function descargarPdf(bloque) {
     const fctx = finales[bloque.empresa];
     if (!fctx) return;
@@ -279,7 +255,7 @@ export default function OperadorDashboard({ perfil, onLogout }) {
           filasPorBanco: bloque.resultado,
           ctx,
         });
-        setFinales((prev) => ({ ...prev, [bloque.empresa]: { ...ctx, empresa: bloque.empresa, corridaId: corrida.id, secuencia: corrida.secuencia_guayaquil ?? null } }));
+        setFinales((prev) => ({ ...prev, [bloque.empresa]: { ...ctx, empresa: bloque.empresa, corridaId: corrida.id } }));
       }
       getHistorialCorridas(500).then(setHistorial);
     } catch (err) {
@@ -453,11 +429,6 @@ export default function OperadorDashboard({ perfil, onLogout }) {
                               >
                                 {previaAbierta[kPrevia] ? 'Ocultar vista previa' : 'Vista previa'}
                               </button>
-                              {fctx && (
-                                <button onClick={() => descargarBanco(bloque, banco)} style={btnGhost} title={nombreArchivoBanco(banco, { ...fctx, tipo, secuencia: null })}>
-                                  Descargar .txt{banco === 'guayaquil' ? ' (sin consecutivo)' : ''}
-                                </button>
-                              )}
                             </div>
                           </div>
                           {previaAbierta[kPrevia] && (
@@ -511,12 +482,12 @@ export default function OperadorDashboard({ perfil, onLogout }) {
               </div>
               {!finalizado && (
                 <p style={{ fontSize: 12.5, color: 'var(--muted)', marginTop: 10 }}>
-                  Revisa la vista previa. Al finalizar se registra el proceso{variasEmpresas ? ' de cada empresa' : ''} y se habilitan las descargas (.txt, PDF y Excel).
+                  Revisa la vista previa. Al finalizar se registra el proceso{variasEmpresas ? ' de cada empresa' : ''} y se habilitan el resumen (PDF) y el detalle (Excel). Los archivos .txt de los bancos los descarga el Admin.
                 </p>
               )}
               {algunoFinalizado && (
                 <p style={{ fontSize: 12.5, color: 'var(--ok)', marginTop: 10 }}>
-                  Registrado en el historial — el Admin ya lo puede ver. Si sales de esta pantalla, puedes volver a descargar todo desde «Dashboard de seguimiento» → «Historial de corridas».
+                  Registrado — el Admin ya lo puede ver y subir a los bancos. Si sales de esta pantalla, puedes volver a bajar el resumen y el detalle desde «Dashboard de seguimiento» mientras el proceso siga pendiente de subir.
                 </p>
               )}
             </Section>
@@ -527,13 +498,17 @@ export default function OperadorDashboard({ perfil, onLogout }) {
       {vista === 'seguimiento' && (
         <>
           <h1 style={pageTitle}>Dashboard de seguimiento</h1>
-          <p style={pageSubtitle}>Solo lectura — acá no se puede editar ni anular nada, es para que tengas visibilidad de todo lo que se ha corrido.</p>
+          <p style={pageSubtitle}>Solo lectura. Aquí ves los procesos que están pendientes de subir al banco; cuando el Admin confirma la subida, salen de la lista.</p>
           <VistaSeguimiento corridas={historial} empresasPermitidas={misEmpresas || []} miId={miId} />
         </>
       )}
     </AppShell>
   );
 }
+
+// Una corrida sigue "pendiente" mientras algún banco no se haya confirmado como subido (igual que en el Admin).
+// Cuando el Admin confirma todos sus bancos, sale de la lista del operador.
+const esPendiente = (c) => c.finalizado && !c.anulada && Object.keys(c.detalle_bancos || {}).some((banco) => !c.subidoBanco?.[banco]);
 
 function VistaSeguimiento({ corridas: todas, empresasPermitidas, miId }) {
   const [filtroEmpresa, setFiltroEmpresa] = useState('consolidado');
@@ -550,6 +525,7 @@ function VistaSeguimiento({ corridas: todas, empresasPermitidas, miId }) {
   const corridas = hayVariasEmpresas ? filtrarPorEmpresa(todas, filtroEmpresa) : todas;
 
   const filtradas = corridas.filter((c) => {
+    if (!esPendiente(c)) return false;
     if (filtroTipo !== 'todos' && c.tipo !== filtroTipo) return false;
     if (filtroBanco !== 'todos' && !c.detalle_bancos?.[filtroBanco]) return false;
     if (busqueda.trim()) {
@@ -576,7 +552,7 @@ function VistaSeguimiento({ corridas: todas, empresasPermitidas, miId }) {
 
       <PanelKPIs corridas={corridas} mostrarPorEmpresa={hayVariasEmpresas && filtroEmpresa === 'consolidado'} />
 
-      <h2 style={{ fontSize: 18, fontWeight: 700, margin: '40px 0 14px', color: '#101828' }}>Historial de corridas</h2>
+      <h2 style={{ fontSize: 18, fontWeight: 700, margin: '40px 0 14px', color: '#101828' }}>Procesos pendientes de subir al banco</h2>
 
       <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', marginBottom: 14 }}>
         <input
@@ -602,7 +578,7 @@ function VistaSeguimiento({ corridas: todas, empresasPermitidas, miId }) {
       </div>
 
       {filtradas.length === 0 ? (
-        <p style={{ color: 'var(--muted)', fontSize: 14 }}>Nada coincide con ese filtro.</p>
+        <p style={{ color: 'var(--muted)', fontSize: 14 }}>{corridas.some(esPendiente) ? 'Nada coincide con ese filtro.' : 'No hay procesos pendientes. Cuando finalices uno, aparece aquí hasta que el Admin lo suba al banco.'}</p>
       ) : (
         filtradas.map((c) => <FilaSeguimiento key={c.id} corrida={c} miId={miId} soloBanco={filtroBanco === 'todos' ? null : filtroBanco} />)
       )}
@@ -629,8 +605,8 @@ function FilaSeguimiento({ corrida: c, miId, soloBanco }) {
         )}
       </div>
 
-      {/* Solo quien generó la corrida puede volver a bajar sus archivos (así lo exige la base). */}
-      {!anulada && miId && c.generado_por === miId && <DescargasCorrida corrida={c} soloBanco={soloBanco} />}
+      {/* Solo quien generó la corrida puede volver a bajar su resumen y detalle (así lo exige la base). Los .txt son del Admin. */}
+      {!anulada && miId && c.generado_por === miId && <DescargasCorrida corrida={c} />}
     </div>
   );
 }

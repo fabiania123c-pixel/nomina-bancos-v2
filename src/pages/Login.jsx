@@ -1,10 +1,13 @@
 import { useState } from 'react';
 
-export default function Login({ onLogin }) {
+export default function Login({ onLogin, onRecuperar, aviso = '' }) {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [error, setError] = useState('');
   const [cargando, setCargando] = useState(false);
+  // 'login' = entrar normal; 'recuperar' = pedir el correo para cambiar la contraseña
+  const [modo, setModo] = useState('login');
+  const [enviado, setEnviado] = useState(false);
 
   async function handleSubmit(e) {
     e.preventDefault();
@@ -20,11 +23,85 @@ export default function Login({ onLogin }) {
     }
   }
 
+  async function handleRecuperar(e) {
+    e.preventDefault();
+    setError('');
+    setCargando(true);
+    try {
+      await onRecuperar(email);
+      setEnviado(true);
+    } catch (err) {
+      console.error(err);
+      // 429 / "rate limit": Supabase limita cuántos correos se pueden pedir seguidos.
+      const limite = /rate limit|too many|seconds/i.test(err?.message || '') || err?.status === 429;
+      setError(
+        limite
+          ? 'Ya se pidió un correo hace poco. Espera un minuto y vuelve a intentar.'
+          : 'No se pudo enviar el correo. Revisa que esté bien escrito e inténtalo otra vez.'
+      );
+    } finally {
+      setCargando(false);
+    }
+  }
+
+  function abrirRecuperar() {
+    setModo('recuperar');
+    setError('');
+    setEnviado(false);
+  }
+
+  function volverAlLogin() {
+    setModo('login');
+    setError('');
+    setEnviado(false);
+  }
+
+  if (modo === 'recuperar') {
+    return (
+      <div style={styles.wrap}>
+        <form onSubmit={handleRecuperar} style={styles.card}>
+          <h1 style={styles.title}>Cambiar contraseña</h1>
+          <p style={styles.subtitle}>Te enviamos un correo con un enlace para crear una nueva.</p>
+
+          {enviado ? (
+            <>
+              <div style={styles.ok}>
+                Si el correo está registrado, en unos minutos te llega un mensaje con el enlace. Revisa también spam o correo no deseado. El enlace dura poco tiempo.
+              </div>
+              <button type="button" style={styles.button} onClick={volverAlLogin}>Volver a entrar</button>
+            </>
+          ) : (
+            <>
+              <label style={styles.label}>Correo</label>
+              <input
+                style={styles.input}
+                type="email"
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
+                autoComplete="username"
+                required
+              />
+
+              {error && <div style={styles.error}>{error}</div>}
+
+              <button style={styles.button} type="submit" disabled={cargando}>
+                {cargando ? 'Enviando...' : 'Enviar enlace al correo'}
+              </button>
+              <button type="button" style={styles.linkBtn} onClick={volverAlLogin}>Volver</button>
+            </>
+          )}
+        </form>
+      </div>
+    );
+  }
+
   return (
     <div style={styles.wrap}>
       <form onSubmit={handleSubmit} style={styles.card}>
         <h1 style={styles.title}>Nómina Bancos</h1>
         <p style={styles.subtitle}>Marathon / Superdeporte</p>
+
+        {aviso && <div style={styles.aviso}>{aviso}</div>}
 
         <label style={styles.label}>Correo</label>
         <input
@@ -51,6 +128,7 @@ export default function Login({ onLogin }) {
         <button style={styles.button} type="submit" disabled={cargando}>
           {cargando ? 'Entrando...' : 'Entrar'}
         </button>
+        <button type="button" style={styles.linkBtn} onClick={abrirRecuperar}>¿Olvidaste tu contraseña?</button>
       </form>
     </div>
   );
@@ -85,6 +163,8 @@ const styles = {
     marginTop: 4,
   },
   error: { color: '#c23b3b', fontSize: 12.5, marginTop: 10 },
+  ok: { color: '#1f7a4d', fontSize: 13, lineHeight: 1.5, marginBottom: 6 },
+  aviso: { color: '#8a5a00', background: '#fff6e0', borderRadius: 7, padding: '9px 10px', fontSize: 12.5, lineHeight: 1.45 },
   button: {
     marginTop: 20,
     background: '#145DA0',
@@ -95,5 +175,14 @@ const styles = {
     fontSize: 13.5,
     fontWeight: 600,
     cursor: 'pointer',
+  },
+  linkBtn: {
+    marginTop: 10,
+    background: 'none',
+    border: 'none',
+    color: '#145DA0',
+    fontSize: 12.5,
+    cursor: 'pointer',
+    padding: 4,
   },
 };

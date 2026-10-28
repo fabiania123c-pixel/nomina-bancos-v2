@@ -1,9 +1,21 @@
 import { useEffect, useState } from 'react';
 import { supabase } from './supabaseClient.js';
 
+// Cuando alguien abre el enlace del correo de "cambiar contraseña", Supabase lo manda a esta página con datos en la
+// URL (#...type=recovery) o con un error si el enlace ya venció (#error_code=otp_expired). Se lee UNA vez al cargar el
+// módulo, antes de que Supabase limpie la URL.
+const URL_AL_ABRIR = typeof window !== 'undefined' ? `${window.location.hash}${window.location.search}` : '';
+const ABRIO_DESDE_CORREO = /[#&?]type=recovery\b/.test(URL_AL_ABRIR);
+const ENLACE_VENCIDO = /error_code=otp_expired|error=access_denied/.test(URL_AL_ABRIR);
+
 export function useAuth() {
   const [perfil, setPerfil] = useState(null);
   const [loading, setLoading] = useState(true);
+  // true mientras la persona está poniendo su contraseña nueva (llegó desde el correo).
+  const [recuperando, setRecuperando] = useState(ABRIO_DESDE_CORREO);
+  const [avisoEnlace, setAvisoEnlace] = useState(
+    ENLACE_VENCIDO ? 'El enlace del correo venció o ya se usó. Pide uno nuevo con «¿Olvidaste tu contraseña?».' : ''
+  );
 
   async function cargarPerfil(userId) {
     const { data, error } = await supabase
@@ -30,7 +42,9 @@ export function useAuth() {
       }
     });
 
-    const { data: listener } = supabase.auth.onAuthStateChange((_event, session) => {
+    const { data: listener } = supabase.auth.onAuthStateChange((event, session) => {
+      // Supabase avisa con este evento cuando la persona entra desde el enlace del correo.
+      if (event === 'PASSWORD_RECOVERY') setRecuperando(true);
       if (session?.user) {
         setLoading(true);
         cargarPerfil(session.user.id);
@@ -44,6 +58,7 @@ export function useAuth() {
   }, []);
 
   async function login(email, password) {
+    setAvisoEnlace('');
     const { error } = await supabase.auth.signInWithPassword({ email, password });
     if (error) throw error;
   }
@@ -52,5 +67,27 @@ export function useAuth() {
     await supabase.auth.signOut();
   }
 
-  return { perfil, loading, login, logout };
+  // Supabase manda el correo con el enlace. No dice si el correo existe o no (a propósito, por seguridad).
+  async function enviarCorreoRecuperacion(email) {
+    setAvisoEnlace('');
+    const { error } = await supabase.auth.resetPasswordForEmail(email.trim(), { redirectTo: window.location.origin });
+    if (error) throw error;
+  }
+
+  // La persona ya entró con el enlace del correo: aquí guarda la contraseña nueva.
+  async function cambiarPassword(nueva) {
+    const { error } = await supabase.auth.updateUser({ password: nueva });
+    if (error) throw error;
+    window.history.replaceState(null, '', window.location.pathname);
+    setRecuperando(false);
+  }
+
+  // Si abrió el enlace pero no quiere cambiarla: se cierra esa sesión temporal y vuelve al login.
+  async function cancelarRecuperacion() {
+    window.history.replaceState(null, '', window.location.pathname);
+    setRecuperando(false);
+    await supabase.auth.signOut();
+  }
+
+  return { perfil, loading, recuperando, avisoEnlace, login, logout, enviarCorreoRecuperacion, cambiarPassword, cancelarRecuperacion };
 }

@@ -67,14 +67,14 @@ export function useAuth() {
     await supabase.auth.signOut();
   }
 
-  // Supabase manda el correo con el enlace. No dice si el correo existe o no (a propósito, por seguridad).
-  async function enviarCorreoRecuperacion(email) {
+  // "Olvidé mi contraseña": Supabase le manda el correo con el link a la persona.
+  async function solicitarCambioPassword(email) {
     setAvisoEnlace('');
     const { error } = await supabase.auth.resetPasswordForEmail(email.trim(), { redirectTo: window.location.origin });
     if (error) throw error;
   }
 
-  // La persona ya entró con el enlace del correo: aquí guarda la contraseña nueva.
+  // La persona ya entró con un enlace de recuperación (el Admin puede mandarlo desde Supabase): aquí guarda la nueva contraseña.
   async function cambiarPassword(nueva) {
     const { error } = await supabase.auth.updateUser({ password: nueva });
     if (error) throw error;
@@ -89,5 +89,5 @@ export function useAuth() {
     await supabase.auth.signOut();
   }
 
-  return { perfil, loading, recuperando, avisoEnlace, login, logout, enviarCorreoRecuperacion, cambiarPassword, cancelarRecuperacion };
+  return { perfil, loading, recuperando, avisoEnlace, login, logout, solicitarCambioPassword, cambiarPassword, cancelarRecuperacion };
 }

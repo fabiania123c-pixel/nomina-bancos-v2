@@ -5,7 +5,7 @@ import OperadorDashboard from './pages/OperadorDashboard.jsx';
 import AdminDashboard from './pages/AdminDashboard.jsx';
 
 export default function App() {
-  const { perfil, loading, recuperando, avisoEnlace, login, logout, enviarCorreoRecuperacion, cambiarPassword, cancelarRecuperacion } = useAuth();
+  const { perfil, loading, recuperando, avisoEnlace, login, logout, solicitarCambioPassword, cambiarPassword, cancelarRecuperacion } = useAuth();
 
   // Llegó desde el correo de "cambiar contraseña": primero pone la nueva, antes de entrar a la app.
   if (recuperando) {
@@ -17,7 +17,7 @@ export default function App() {
   }
 
   if (!perfil) {
-    return <Login onLogin={login} onRecuperar={enviarCorreoRecuperacion} aviso={avisoEnlace} />;
+    return <Login onLogin={login} onSolicitarCambio={solicitarCambioPassword} aviso={avisoEnlace} />;
   }
 
   if (perfil.rol === 'admin') {
